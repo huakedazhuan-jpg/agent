@@ -146,6 +146,12 @@ Compile without tests:
 .\mvnw.cmd -DskipTests compile
 ```
 
+Package without tests:
+
+```powershell
+.\mvnw.cmd -DskipTests package
+```
+
 Start the application:
 
 ```powershell
@@ -157,6 +163,17 @@ Open the local console:
 ```text
 http://localhost:8080/
 ```
+
+## Quality Gate
+
+The repository includes a baseline GitHub Actions workflow at `.github/workflows/ci.yml`.
+
+Current CI gate:
+
+- `./mvnw -B --no-transfer-progress test`
+- `./mvnw -B --no-transfer-progress -DskipTests package`
+
+See `docs/quality-gates.md` for the current quality gate and known CI/CD gaps.
 
 ## HTTP Endpoints
 
@@ -243,7 +260,7 @@ The following gaps are intentional tracking items for the production-grade upgra
 - RAG is still local/file-backed, not pgvector hybrid retrieval.
 - Feishu event handling is not yet backed by a persistent inbox/dead-letter table.
 - No production Docker Compose stack yet.
-- No CI quality gate yet.
+- Only a baseline CI quality gate exists; coverage, static analysis, container build, and integration-test gates are still missing.
 - No Prometheus/Grafana observability yet.
 - Tooling is safer than the initial prototype, but production tool policy still needs a full allow/approval/deny pipeline.
 
