@@ -1,0 +1,36 @@
+spring:
+  config:
+    import: "optional:file:.env[.properties]"
+  application:
+    name: xingclaw-agent
+  ai:
+    openai:
+      api-key: ${MOONSHOT_API_KEY}
+      base-url: ${MOONSHOT_BASE_URL:https://api.moonshot.ai}
+      chat:
+        options:
+          model: ${MOONSHOT_MODEL:kimi-k2.5}
+          temperature: ${MOONSHOT_TEMPERATURE:1}
+
+feishu:
+  app-id: ${FEISHU_APP_ID}
+  app-secret: ${FEISHU_APP_SECRET}
+
+tavily:
+  api-key: ${TAVILY_API_KEY}
+agent:
+  tools:
+    security:
+      workspace-root: ${AGENT_WORKSPACE_ROOT:./workspace}
+      http:
+        allowed-domains:
+          - query1.finance.yahoo.com
+          - query2.finance.yahoo.com
+          - stooq.com
+          - www.google.com
+          - www.bing.com
+          - duckduckgo.com
+          - www.baidu.com
+        connect-timeout: 2s
+        read-timeout: 5s
+        max-response-bytes: 8192

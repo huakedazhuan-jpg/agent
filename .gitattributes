@@ -1,0 +1,16 @@
+* text=auto
+
+/.gitattributes text eol=lf
+/.gitignore text eol=lf
+/.env.example text eol=lf
+
+*.java text eol=lf
+*.xml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.html text eol=lf
+*.properties text eol=lf
+
+/mvnw text eol=lf
+*.cmd text eol=crlf
