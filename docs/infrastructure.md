@@ -1,6 +1,6 @@
 # Infrastructure
 
-This phase introduces the baseline infrastructure for durable state, but the current application code still uses some prototype storage adapters such as JSONL chat memory and in-memory trace state.
+This phase introduces baseline durable infrastructure. Agent trace can now use PostgreSQL through a JDBC repository, while some runtime state still uses prototype adapters such as JSONL chat memory and in-memory tool approval state.
 
 ## Services
 
@@ -48,16 +48,22 @@ $env:SPRING_FLYWAY_ENABLED = "true"
 .\mvnw.cmd spring-boot:run
 ```
 
-The initial migration creates the future durable-state tables for:
+The migrations create durable-state tables for:
 
 - conversations
 - messages
-- agent trace events
+- agent trace aggregate records and events
 - tool approvals
 - Feishu event inbox
 
-These tables are not fully wired into runtime code yet. Wiring them into repositories and replacing prototype storage is planned for later Phase 2 work.
+Agent trace can now use PostgreSQL:
+
+```properties
+AGENT_TRACE_REPOSITORY=jdbc
+```
+
+The default remains `memory` so local tests and development startup do not require a running database. Chat memory, tool approvals, and Feishu event inbox wiring remain planned Phase 2 work.
 
 ## Current safety boundary
 
-The local default passwords in `.env.example` and `docker-compose.yml` are only for development. Production must provide explicit database and Redis credentials through environment variables or a secret manager.
+The local default passwords in `.env.example` and `docker-compose.yml` are only for development. Production must provide explicit database and Redis credentials through environment variables or a secret manager. Production also must enable Flyway and set `AGENT_TRACE_REPOSITORY=jdbc`.

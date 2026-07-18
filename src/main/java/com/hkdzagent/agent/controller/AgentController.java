@@ -10,6 +10,7 @@ import com.hkdzagent.agent.model.ChatResponse;
 import com.hkdzagent.agent.trace.AgentTrace;
 import com.hkdzagent.agent.trace.AgentTraceEvent;
 import com.hkdzagent.agent.trace.AgentTraceRecorder;
+import com.hkdzagent.agent.trace.AgentTraceRepository;
 import com.hkdzagent.agent.trace.AgentTraceSanitizer;
 import com.hkdzagent.agent.trace.InMemoryAgentTraceRepository;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -36,7 +37,7 @@ public class AgentController {
     private final LLMClient llmClient;
     private final AgentTraceSanitizer fallbackSanitizer = new AgentTraceSanitizer(120);
     private ObjectMapper objectMapper = new ObjectMapper();
-    private InMemoryAgentTraceRepository traceRepository = new InMemoryAgentTraceRepository();
+    private AgentTraceRepository traceRepository = new InMemoryAgentTraceRepository();
     private AgentTraceRecorder traceRecorder = new AgentTraceRecorder(traceRepository, fallbackSanitizer);
     private ToolConfirmationService confirmationService = new ToolConfirmationService(fallbackSanitizer);
 
@@ -103,7 +104,7 @@ public class AgentController {
     }
 
     @Autowired(required = false)
-    void setTraceRepository(InMemoryAgentTraceRepository traceRepository) {
+    void setTraceRepository(AgentTraceRepository traceRepository) {
         this.traceRepository = traceRepository;
     }
 

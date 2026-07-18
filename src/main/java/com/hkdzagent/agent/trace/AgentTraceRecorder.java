@@ -6,10 +6,10 @@ import java.util.Map;
 
 public class AgentTraceRecorder {
 
-    private final InMemoryAgentTraceRepository repository;
+    private final AgentTraceRepository repository;
     private final AgentTraceSanitizer sanitizer;
 
-    public AgentTraceRecorder(InMemoryAgentTraceRepository repository, AgentTraceSanitizer sanitizer) {
+    public AgentTraceRecorder(AgentTraceRepository repository, AgentTraceSanitizer sanitizer) {
         this.repository = repository;
         this.sanitizer = sanitizer;
     }
@@ -129,17 +129,11 @@ public class AgentTraceRecorder {
     }
 
     public void finishTrace(String traceId, String status) {
-        AgentTrace trace = repository.findByTraceId(traceId);
-        if (trace != null) {
-            trace.finish(TraceStatus.valueOf(status));
-        }
+        repository.finish(traceId, TraceStatus.valueOf(status));
     }
 
     private void addEvent(String traceId, AgentTraceEvent event) {
-        AgentTrace trace = repository.findByTraceId(traceId);
-        if (trace != null) {
-            trace.addEvent(event);
-        }
+        repository.addEvent(traceId, event);
     }
 
     private Long durationMs(Duration duration) {

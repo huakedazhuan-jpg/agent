@@ -21,7 +21,8 @@ class InfrastructureConfigurationTest {
                 "<artifactId>spring-boot-starter-data-redis</artifactId>",
                 "<artifactId>flyway-core</artifactId>",
                 "<artifactId>flyway-database-postgresql</artifactId>",
-                "<artifactId>postgresql</artifactId>"
+                "<artifactId>postgresql</artifactId>",
+                "<artifactId>h2</artifactId>"
         );
     }
 
@@ -45,7 +46,9 @@ class InfrastructureConfigurationTest {
                 "enabled: ${SPRING_FLYWAY_ENABLED:false}",
                 "locations: classpath:db/migration/postgresql",
                 "sql:",
-                "mode: never"
+                "mode: never",
+                "trace:",
+                "repository: ${AGENT_TRACE_REPOSITORY:memory}"
         );
     }
 
@@ -86,6 +89,22 @@ class InfrastructureConfigurationTest {
     }
 
     @Test
+    void secondFlywayMigrationAddsDurableAgentTraceAggregate() throws IOException {
+        Path migration = PROJECT_ROOT.resolve(
+                "src/main/resources/db/migration/postgresql/V2__durable_agent_traces.sql"
+        );
+        String sql = Files.readString(migration);
+
+        assertThat(sql).contains(
+                "CREATE TABLE agent_traces",
+                "ALTER TABLE agent_trace_events",
+                "ADD COLUMN step INTEGER",
+                "ADD CONSTRAINT fk_agent_trace_events_trace",
+                "REFERENCES agent_traces (trace_id)"
+        );
+    }
+
+    @Test
     void environmentTemplateDocumentsInfrastructureSettings() throws IOException {
         String envExample = Files.readString(PROJECT_ROOT.resolve(".env.example"));
 
@@ -95,7 +114,8 @@ class InfrastructureConfigurationTest {
                 "POSTGRES_PASSWORD=xingclaw-local-password",
                 "REDIS_HOST=localhost",
                 "REDIS_PASSWORD=xingclaw-local-redis",
-                "SPRING_FLYWAY_ENABLED=false"
+                "SPRING_FLYWAY_ENABLED=false",
+                "AGENT_TRACE_REPOSITORY=memory"
         );
     }
 
@@ -107,7 +127,7 @@ class InfrastructureConfigurationTest {
                 "# Infrastructure",
                 "docker compose up -d postgres redis",
                 "Flyway is present but disabled by default",
-                "These tables are not fully wired into runtime code yet",
+                "Agent trace can now use PostgreSQL",
                 "Production must provide explicit database and Redis credentials"
         );
     }

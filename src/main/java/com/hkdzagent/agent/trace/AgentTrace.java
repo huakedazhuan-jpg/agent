@@ -16,10 +16,27 @@ public class AgentTrace {
     private Instant endedAt;
 
     AgentTrace(String traceId, String sessionId, String userMessage) {
+        this(traceId, sessionId, userMessage, Instant.now(), TraceStatus.RUNNING, null, List.of());
+    }
+
+    AgentTrace(
+            String traceId,
+            String sessionId,
+            String userMessage,
+            Instant startedAt,
+            TraceStatus status,
+            Instant endedAt,
+            List<AgentTraceEvent> events
+    ) {
         this.traceId = traceId;
         this.sessionId = sessionId;
         this.userMessage = userMessage;
-        this.startedAt = Instant.now();
+        this.startedAt = startedAt == null ? Instant.now() : startedAt;
+        this.status = status == null ? TraceStatus.RUNNING : status;
+        this.endedAt = endedAt;
+        if (events != null) {
+            this.events.addAll(events);
+        }
     }
 
     public String traceId() {
@@ -32,6 +49,14 @@ public class AgentTrace {
 
     public String userMessage() {
         return userMessage;
+    }
+
+    public Instant startedAt() {
+        return startedAt;
+    }
+
+    public synchronized Instant endedAt() {
+        return endedAt;
     }
 
     public synchronized TraceStatus status() {

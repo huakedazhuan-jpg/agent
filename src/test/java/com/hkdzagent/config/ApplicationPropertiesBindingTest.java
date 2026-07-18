@@ -7,6 +7,7 @@ import com.hkdzagent.agent.ai.OpenAiCompatibleProperties;
 import com.hkdzagent.agent.im.FeishuProperties;
 import com.hkdzagent.agent.rag.RagProperties;
 import com.hkdzagent.agent.tool.TavilyProperties;
+import com.hkdzagent.agent.trace.AgentTraceProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.boot.context.properties.bind.Bindable;
@@ -54,10 +55,11 @@ class ApplicationPropertiesBindingTest {
     }
 
     @Test
-    void bindsMemoryRagTavilyAndFeishuProperties() {
+    void bindsMemoryRagTavilyTraceAndFeishuProperties() {
         MockEnvironment environment = new MockEnvironment()
                 .withProperty("agent.memory.file", "data/test-memory.jsonl")
                 .withProperty("agent.rag.index-file", "data/test-rag-index.json")
+                .withProperty("agent.trace.repository", "jdbc")
                 .withProperty("tavily.api-key", "tavily-api-key")
                 .withProperty("feishu.app-id", "feishu-app-id")
                 .withProperty("feishu.app-secret", "feishu-app-secret")
@@ -69,11 +71,13 @@ class ApplicationPropertiesBindingTest {
 
         ChatMemoryProperties memory = bind(environment, "agent.memory", ChatMemoryProperties.class);
         RagProperties rag = bind(environment, "agent.rag", RagProperties.class);
+        AgentTraceProperties trace = bind(environment, "agent.trace", AgentTraceProperties.class);
         TavilyProperties tavily = bind(environment, "tavily", TavilyProperties.class);
         FeishuProperties feishu = bind(environment, "feishu", FeishuProperties.class);
 
         assertThat(memory.file()).isEqualTo(Path.of("data/test-memory.jsonl"));
         assertThat(rag.indexFile()).isEqualTo(Path.of("data/test-rag-index.json"));
+        assertThat(trace.repository()).isEqualTo("jdbc");
         assertThat(tavily.apiKey()).isEqualTo("tavily-api-key");
         assertThat(feishu.appId()).isEqualTo("feishu-app-id");
         assertThat(feishu.appSecret()).isEqualTo("feishu-app-secret");

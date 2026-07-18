@@ -42,18 +42,20 @@ public class ProductionConfigurationValidator implements InitializingBean {
             return;
         }
 
-        List<String> unsafeProperties = REQUIRED_PRODUCTION_PROPERTIES.stream()
+        List<String> unsafeProperties = new ArrayList<>(REQUIRED_PRODUCTION_PROPERTIES.stream()
                 .filter(this::isUnsafeProperty)
-                .toList();
+                .toList());
 
         if (usesDefaultWorkspaceRoot()) {
-            unsafeProperties = new ArrayList<>(unsafeProperties);
             unsafeProperties.add("agent.tools.security.workspace-root must be explicit in prod");
         }
 
         if (!flywayEnabled()) {
-            unsafeProperties = new ArrayList<>(unsafeProperties);
             unsafeProperties.add("spring.flyway.enabled must be true in prod");
+        }
+
+        if (!jdbcTraceRepositoryEnabled()) {
+            unsafeProperties.add("agent.trace.repository must be jdbc in prod");
         }
 
         if (!unsafeProperties.isEmpty()) {
@@ -96,5 +98,10 @@ public class ProductionConfigurationValidator implements InitializingBean {
 
     private boolean flywayEnabled() {
         return environment.getProperty("spring.flyway.enabled", Boolean.class, false);
+    }
+
+    private boolean jdbcTraceRepositoryEnabled() {
+        String repository = environment.getProperty("agent.trace.repository", "");
+        return "jdbc".equalsIgnoreCase(repository.trim());
     }
 }

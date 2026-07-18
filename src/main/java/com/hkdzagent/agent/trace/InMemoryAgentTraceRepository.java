@@ -5,19 +5,22 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-public class InMemoryAgentTraceRepository {
+public class InMemoryAgentTraceRepository implements AgentTraceRepository {
 
     private final Map<String, AgentTrace> traces = new LinkedHashMap<>();
 
+    @Override
     public synchronized AgentTrace save(AgentTrace trace) {
         traces.put(trace.traceId(), trace);
         return trace;
     }
 
+    @Override
     public synchronized AgentTrace findByTraceId(String traceId) {
         return traces.get(traceId);
     }
 
+    @Override
     public synchronized List<AgentTrace> findRecent(int limit) {
         List<AgentTrace> recent = new ArrayList<>(traces.values());
         List<AgentTrace> reversed = new ArrayList<>();
@@ -25,5 +28,15 @@ public class InMemoryAgentTraceRepository {
             reversed.add(recent.get(i));
         }
         return List.copyOf(reversed);
+    }
+
+    @Override
+    public synchronized void addEvent(String traceId, AgentTraceEvent event) {
+        AgentTraceRepository.super.addEvent(traceId, event);
+    }
+
+    @Override
+    public synchronized void finish(String traceId, TraceStatus status) {
+        AgentTraceRepository.super.finish(traceId, status);
     }
 }

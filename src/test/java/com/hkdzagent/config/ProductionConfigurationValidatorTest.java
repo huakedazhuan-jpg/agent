@@ -35,7 +35,8 @@ class ProductionConfigurationValidatorTest {
                         "spring.datasource.password=prod-postgres-password",
                         "spring.data.redis.host=redis.internal",
                         "spring.data.redis.password=prod-redis-password",
-                        "spring.flyway.enabled=true"
+                        "spring.flyway.enabled=true",
+                        "agent.trace.repository=jdbc"
                 )
                 .run(context -> {
                     assertThat(context).hasFailed();
@@ -63,7 +64,8 @@ class ProductionConfigurationValidatorTest {
                         "spring.datasource.password=prod-postgres-password",
                         "spring.data.redis.host=redis.internal",
                         "spring.data.redis.password=prod-redis-password",
-                        "spring.flyway.enabled=true"
+                        "spring.flyway.enabled=true",
+                        "agent.trace.repository=jdbc"
                 )
                 .run(context -> {
                     assertThat(context).hasFailed();
@@ -91,7 +93,8 @@ class ProductionConfigurationValidatorTest {
                         "spring.datasource.password=prod-postgres-password",
                         "spring.data.redis.host=redis.internal",
                         "spring.data.redis.password=prod-redis-password",
-                        "spring.flyway.enabled=true"
+                        "spring.flyway.enabled=true",
+                        "agent.trace.repository=jdbc"
                 )
                 .run(context -> assertThat(context).hasNotFailed());
     }
@@ -115,12 +118,42 @@ class ProductionConfigurationValidatorTest {
                         "spring.datasource.password=xingclaw-local-password",
                         "spring.data.redis.host=redis.internal",
                         "spring.data.redis.password=xingclaw-local-redis",
-                        "spring.flyway.enabled=false"
+                        "spring.flyway.enabled=false",
+                        "agent.trace.repository=jdbc"
                 )
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure())
                             .hasRootCauseMessage("Unsafe production configuration: spring.datasource.password, spring.data.redis.password, spring.flyway.enabled must be true in prod");
+                });
+    }
+
+    @Test
+    void failsFastWhenProductionUsesInMemoryTraceRepository() {
+        contextRunner
+                .withPropertyValues(
+                        "spring.profiles.active=prod",
+                        "spring.ai.openai.api-key=prod-openai-key",
+                        "spring.ai.openai.base-url=https://api.moonshot.ai",
+                        "spring.ai.openai.chat.options.model=kimi-k2.5",
+                        "feishu.app-id=prod-feishu-app",
+                        "feishu.app-secret=prod-feishu-secret",
+                        "feishu.verification-token=prod-feishu-verification-token",
+                        "feishu.encrypt-key=prod-feishu-encrypt-key",
+                        "tavily.api-key=prod-tavily-key",
+                        "agent.tools.security.workspace-root=/srv/xingclaw-agent/workspace",
+                        "spring.datasource.url=jdbc:postgresql://postgres.internal:5432/xingclaw_agent",
+                        "spring.datasource.username=prod_agent",
+                        "spring.datasource.password=prod-postgres-password",
+                        "spring.data.redis.host=redis.internal",
+                        "spring.data.redis.password=prod-redis-password",
+                        "spring.flyway.enabled=true",
+                        "agent.trace.repository=memory"
+                )
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasRootCauseMessage("Unsafe production configuration: agent.trace.repository must be jdbc in prod");
                 });
     }
 }
