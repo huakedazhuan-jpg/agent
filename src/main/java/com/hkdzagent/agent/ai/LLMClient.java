@@ -23,7 +23,7 @@ public class LLMClient {
                         回答时要注明数据来源和查询时间，说明行情数据可能延迟或缺失。
                         只做信息查询、整理和解释，不提供投资建议，不承诺收益，不替用户做买卖决策。
                         """)
-                .defaultAdvisors(new MessageChatMemoryAdvisor(chatMemory))
+                .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
                 .build();
     }
 

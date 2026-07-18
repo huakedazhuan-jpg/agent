@@ -14,6 +14,9 @@ public class ConversationHistoryService {
     }
 
     public List<Message> findBySessionId(String sessionId, int limit) {
-        return chatMemory.get(sessionId, limit);
+        List<Message> messages = chatMemory.get(sessionId);
+        int safeLimit = Math.max(0, limit);
+        int fromIndex = Math.max(0, messages.size() - safeLimit);
+        return List.copyOf(messages.subList(fromIndex, messages.size()));
     }
 }

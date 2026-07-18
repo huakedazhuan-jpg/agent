@@ -198,7 +198,7 @@ public class KimiToolCallingClient {
         List<ObjectNode> messages = new ArrayList<>();
         messages.add(message("system", SYSTEM_PROMPT));
 
-        for (Message message : chatMemory.get(conversationId, 20)) {
+        for (Message message : lastMessages(chatMemory.get(conversationId), 20)) {
             ObjectNode historyMessage = historyMessage(message);
             if (historyMessage != null) {
                 messages.add(historyMessage);
@@ -211,12 +211,18 @@ public class KimiToolCallingClient {
 
     private ObjectNode historyMessage(Message message) {
         if (message.getMessageType() == MessageType.USER) {
-            return message("user", message.getContent());
+            return message("user", message.getText());
         }
         if (message.getMessageType() == MessageType.ASSISTANT) {
-            return message("assistant", message.getContent());
+            return message("assistant", message.getText());
         }
         return null;
+    }
+
+    private List<Message> lastMessages(List<Message> messages, int limit) {
+        int safeLimit = Math.max(0, limit);
+        int fromIndex = Math.max(0, messages.size() - safeLimit);
+        return messages.subList(fromIndex, messages.size());
     }
 
     private JsonNode callModel(List<ObjectNode> messages) {

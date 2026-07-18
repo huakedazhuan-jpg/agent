@@ -16,7 +16,7 @@ The current codebase can compile and pass tests, but it should not yet be descri
 ## Tech Stack
 
 - Java 17+
-- Spring Boot 3.3.0
+- Spring Boot 3.5.16
 - Spring AI OpenAI-compatible starter
 - Maven Wrapper 3.9.14
 - Spring Web MVC
@@ -24,7 +24,7 @@ The current codebase can compile and pass tests, but it should not yet be descri
 - Static HTML console
 - Feishu OpenAPI integration prototype
 
-Current Spring AI usage still depends on a milestone version. Upgrading to a stable Spring AI release is tracked as Phase 1 work.
+Spring AI is pinned to the stable 1.1.x line because this project currently stays on Spring Boot 3.x. Spring AI 2.x targets Spring Boot 4.x.
 
 ## Current Features
 

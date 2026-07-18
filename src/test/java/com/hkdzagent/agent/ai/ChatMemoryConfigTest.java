@@ -34,8 +34,8 @@ class ChatMemoryConfigTest {
                     chatMemory.add("session-config", List.of(new UserMessage("persist through config")));
 
                     ChatMemory reloadedMemory = new PersistentChatMemory(storageFile);
-                    assertThat(reloadedMemory.get("session-config", 10))
-                            .extracting(Message::getContent)
+                    assertThat(reloadedMemory.get("session-config"))
+                            .extracting(Message::getText)
                             .containsExactly("persist through config");
                 });
     }

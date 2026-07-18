@@ -7,7 +7,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.memory.InMemoryChatMemory;
+import org.springframework.ai.chat.messages.Message;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -22,8 +22,10 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -64,7 +66,7 @@ class KimiToolCallingClientTest {
         })) {
             Object client = newClient(
                     server.baseUrl(),
-                    new InMemoryChatMemory(),
+                    new TestChatMemory(),
                     5,
                     request -> "file tool should not be called",
                     request -> "command tool should not be called",
@@ -116,7 +118,7 @@ class KimiToolCallingClientTest {
         })) {
             Object client = newClient(
                     server.baseUrl(),
-                    new InMemoryChatMemory(),
+                    new TestChatMemory(),
                     5,
                     request -> {
                         fail("file tool must not be called for unknown tool");
@@ -156,7 +158,7 @@ class KimiToolCallingClientTest {
                 ))) {
             Object client = newClient(
                     server.baseUrl(),
-                    new InMemoryChatMemory(),
+                    new TestChatMemory(),
                     1,
                     request -> "file tool should not be called",
                     request -> "command tool should not be called",
@@ -181,7 +183,7 @@ class KimiToolCallingClientTest {
 
         try (MockOpenAiServer server = MockOpenAiServer.start(requestBodies,
                 requestIndex -> finalResponse("answer " + requestIndex))) {
-            ChatMemory chatMemory = new InMemoryChatMemory();
+            ChatMemory chatMemory = new TestChatMemory();
             Object client = newClient(
                     server.baseUrl(),
                     chatMemory,
@@ -419,6 +421,33 @@ class KimiToolCallingClientTest {
             try (OutputStream outputStream = exchange.getResponseBody()) {
                 outputStream.write(bytes);
             }
+        }
+    }
+
+    private static final class TestChatMemory implements ChatMemory {
+
+        private final Map<String, List<Message>> messagesByConversation = new ConcurrentHashMap<>();
+
+        @Override
+        public void add(String conversationId, List<Message> messages) {
+            messagesByConversation.compute(conversationId, (key, existingMessages) -> {
+                List<Message> updatedMessages = new ArrayList<>();
+                if (existingMessages != null) {
+                    updatedMessages.addAll(existingMessages);
+                }
+                updatedMessages.addAll(messages);
+                return updatedMessages;
+            });
+        }
+
+        @Override
+        public List<Message> get(String conversationId) {
+            return List.copyOf(messagesByConversation.getOrDefault(conversationId, List.of()));
+        }
+
+        @Override
+        public void clear(String conversationId) {
+            messagesByConversation.remove(conversationId);
         }
     }
 }

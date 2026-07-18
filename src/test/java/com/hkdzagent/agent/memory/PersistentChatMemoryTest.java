@@ -86,7 +86,7 @@ class PersistentChatMemoryTest {
 
     private static List<String> messageContents(List<Message> messages) {
         return messages.stream()
-                .map(Message::getContent)
+                .map(Message::getText)
                 .toList();
     }
 

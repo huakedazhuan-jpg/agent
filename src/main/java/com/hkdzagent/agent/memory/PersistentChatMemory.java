@@ -37,14 +37,11 @@ public class PersistentChatMemory implements ChatMemory {
     }
 
     @Override
-    public synchronized List<Message> get(String conversationId, int lastN) {
-        List<Message> matched = messages.stream()
+    public synchronized List<Message> get(String conversationId) {
+        return messages.stream()
                 .filter(message -> message.sessionId().equals(conversationId))
                 .map(StoredMessage::toMessage)
                 .toList();
-
-        int fromIndex = Math.max(0, matched.size() - Math.max(0, lastN));
-        return List.copyOf(matched.subList(fromIndex, matched.size()));
     }
 
     @Override
@@ -111,7 +108,7 @@ public class PersistentChatMemory implements ChatMemory {
             return new StoredMessage(
                     sessionId,
                     message.getMessageType().name(),
-                    message.getContent(),
+                    message.getText(),
                     Instant.now().toString()
             );
         }
