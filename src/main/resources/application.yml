@@ -15,6 +15,8 @@ spring:
 feishu:
   app-id: ${FEISHU_APP_ID}
   app-secret: ${FEISHU_APP_SECRET}
+  verification-token: ${FEISHU_VERIFICATION_TOKEN:}
+  encrypt-key: ${FEISHU_ENCRYPT_KEY:}
 
 tavily:
   api-key: ${TAVILY_API_KEY}

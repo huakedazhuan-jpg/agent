@@ -26,6 +26,8 @@ class SecretConfigurationTest {
         assertThat(applicationYml.getProperty("spring.ai.openai.api-key")).asString().isNotBlank();
         assertThat(applicationYml.getProperty("feishu.app-id")).asString().isNotBlank();
         assertThat(applicationYml.getProperty("feishu.app-secret")).asString().isNotBlank();
+        assertThat(applicationYml.getProperty("feishu.verification-token")).asString().isNotNull();
+        assertThat(applicationYml.getProperty("feishu.encrypt-key")).asString().isNotNull();
         assertThat(applicationYml.getProperty("tavily.api-key")).asString().isNotBlank();
         assertThat(applicationYml.getProperty("spring.config.import"))
                 .isEqualTo("optional:file:.env[.properties]");
@@ -68,6 +70,8 @@ class SecretConfigurationTest {
                 "MOONSHOT_API_KEY", "moonshot-from-env",
                 "FEISHU_APP_ID", "feishu-app-id-from-env",
                 "FEISHU_APP_SECRET", "feishu-secret-from-env",
+                "FEISHU_VERIFICATION_TOKEN", "feishu-verification-token-from-env",
+                "FEISHU_ENCRYPT_KEY", "feishu-encrypt-key-from-env",
                 "TAVILY_API_KEY", "tavily-from-env",
                 "AGENT_WORKSPACE_ROOT", "./test-workspace"
         )));
@@ -76,6 +80,8 @@ class SecretConfigurationTest {
         assertThat(environment.getProperty("spring.ai.openai.api-key")).isNotBlank().doesNotContain("${");
         assertThat(environment.getProperty("feishu.app-id")).isNotBlank().doesNotContain("${");
         assertThat(environment.getProperty("feishu.app-secret")).isNotBlank().doesNotContain("${");
+        assertThat(environment.getProperty("feishu.verification-token")).isEqualTo("feishu-verification-token-from-env");
+        assertThat(environment.getProperty("feishu.encrypt-key")).isEqualTo("feishu-encrypt-key-from-env");
         assertThat(environment.getProperty("tavily.api-key")).isEqualTo("tavily-from-env");
         assertThat(environment.getProperty("agent.tools.security.workspace-root")).isEqualTo("./test-workspace");
     }
