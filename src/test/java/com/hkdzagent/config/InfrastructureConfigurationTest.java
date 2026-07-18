@@ -105,6 +105,23 @@ class InfrastructureConfigurationTest {
     }
 
     @Test
+    void thirdFlywayMigrationAddsStableRuntimeStateOrdering() throws IOException {
+        Path migration = PROJECT_ROOT.resolve(
+                "src/main/resources/db/migration/postgresql/V3__runtime_state_ordering.sql"
+        );
+        String sql = Files.readString(migration);
+
+        assertThat(sql).contains(
+                "ALTER TABLE agent_messages",
+                "ADD COLUMN message_index INTEGER",
+                "CREATE INDEX ix_agent_messages_conversation_message_index",
+                "ALTER TABLE agent_trace_events",
+                "ADD COLUMN event_index INTEGER",
+                "CREATE INDEX ix_agent_trace_events_trace_event_index"
+        );
+    }
+
+    @Test
     void environmentTemplateDocumentsInfrastructureSettings() throws IOException {
         String envExample = Files.readString(PROJECT_ROOT.resolve(".env.example"));
 
@@ -115,7 +132,8 @@ class InfrastructureConfigurationTest {
                 "REDIS_HOST=localhost",
                 "REDIS_PASSWORD=xingclaw-local-redis",
                 "SPRING_FLYWAY_ENABLED=false",
-                "AGENT_TRACE_REPOSITORY=memory"
+                "AGENT_TRACE_REPOSITORY=memory",
+                "AGENT_MEMORY_REPOSITORY=file"
         );
     }
 
@@ -128,6 +146,7 @@ class InfrastructureConfigurationTest {
                 "docker compose up -d postgres redis",
                 "Flyway is present but disabled by default",
                 "Agent trace can now use PostgreSQL",
+                "Chat memory can now use PostgreSQL",
                 "Production must provide explicit database and Redis credentials"
         );
     }

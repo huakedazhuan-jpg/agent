@@ -58,6 +58,10 @@ public class ProductionConfigurationValidator implements InitializingBean {
             unsafeProperties.add("agent.trace.repository must be jdbc in prod");
         }
 
+        if (!jdbcChatMemoryEnabled()) {
+            unsafeProperties.add("agent.memory.repository must be jdbc in prod");
+        }
+
         if (!unsafeProperties.isEmpty()) {
             throw new IllegalStateException("Unsafe production configuration: " + String.join(", ", unsafeProperties));
         }
@@ -102,6 +106,11 @@ public class ProductionConfigurationValidator implements InitializingBean {
 
     private boolean jdbcTraceRepositoryEnabled() {
         String repository = environment.getProperty("agent.trace.repository", "");
+        return "jdbc".equalsIgnoreCase(repository.trim());
+    }
+
+    private boolean jdbcChatMemoryEnabled() {
+        String repository = environment.getProperty("agent.memory.repository", "");
         return "jdbc".equalsIgnoreCase(repository.trim());
     }
 }

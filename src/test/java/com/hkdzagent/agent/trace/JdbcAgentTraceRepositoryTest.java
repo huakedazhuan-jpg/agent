@@ -44,6 +44,7 @@ class JdbcAgentTraceRepositoryTest {
                     trace_id VARCHAR(128) NOT NULL,
                     event_type VARCHAR(64) NOT NULL,
                     status VARCHAR(32) NOT NULL,
+                    event_index INTEGER NOT NULL DEFAULT 0,
                     step INTEGER NOT NULL DEFAULT 0,
                     tool_name VARCHAR(128),
                     success BOOLEAN,

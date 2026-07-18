@@ -58,6 +58,7 @@ class ApplicationPropertiesBindingTest {
     void bindsMemoryRagTavilyTraceAndFeishuProperties() {
         MockEnvironment environment = new MockEnvironment()
                 .withProperty("agent.memory.file", "data/test-memory.jsonl")
+                .withProperty("agent.memory.repository", "jdbc")
                 .withProperty("agent.rag.index-file", "data/test-rag-index.json")
                 .withProperty("agent.trace.repository", "jdbc")
                 .withProperty("tavily.api-key", "tavily-api-key")
@@ -76,6 +77,7 @@ class ApplicationPropertiesBindingTest {
         FeishuProperties feishu = bind(environment, "feishu", FeishuProperties.class);
 
         assertThat(memory.file()).isEqualTo(Path.of("data/test-memory.jsonl"));
+        assertThat(memory.repository()).isEqualTo("jdbc");
         assertThat(rag.indexFile()).isEqualTo(Path.of("data/test-rag-index.json"));
         assertThat(trace.repository()).isEqualTo("jdbc");
         assertThat(tavily.apiKey()).isEqualTo("tavily-api-key");

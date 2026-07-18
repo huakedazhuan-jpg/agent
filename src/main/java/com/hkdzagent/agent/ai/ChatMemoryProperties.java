@@ -7,7 +7,20 @@ import java.nio.file.Path;
 @ConfigurationProperties(prefix = "agent.memory")
 public class ChatMemoryProperties {
 
+    private String repository = "file";
     private Path file = Path.of("data/chat-memory.jsonl");
+
+    public String repository() {
+        return repository;
+    }
+
+    public String getRepository() {
+        return repository;
+    }
+
+    public void setRepository(String repository) {
+        this.repository = repository;
+    }
 
     public Path file() {
         return file;

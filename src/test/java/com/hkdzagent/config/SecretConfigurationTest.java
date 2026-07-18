@@ -48,6 +48,8 @@ class SecretConfigurationTest {
                 .isEqualTo("${AGENT_KIMI_HISTORY_LIMIT:20}");
         assertThat(applicationYml.getProperty("agent.memory.file"))
                 .isEqualTo("${AGENT_MEMORY_FILE:data/chat-memory.jsonl}");
+        assertThat(applicationYml.getProperty("agent.memory.repository"))
+                .isEqualTo("${AGENT_MEMORY_REPOSITORY:file}");
         assertThat(applicationYml.getProperty("agent.rag.index-file"))
                 .isEqualTo("${AGENT_RAG_INDEX_FILE:data/rag-index.json}");
         assertThat(applicationYml.getProperty("agent.tools.security.allowed-commands"))
@@ -91,6 +93,7 @@ class SecretConfigurationTest {
                 Map.entry("AGENT_KIMI_REQUEST_TIMEOUT", "45s"),
                 Map.entry("AGENT_KIMI_MAX_TOOL_ROUNDS", "7"),
                 Map.entry("AGENT_KIMI_HISTORY_LIMIT", "30"),
+                Map.entry("AGENT_MEMORY_REPOSITORY", "jdbc"),
                 Map.entry("AGENT_MEMORY_FILE", "data/test-memory.jsonl"),
                 Map.entry("AGENT_RAG_INDEX_FILE", "data/test-rag-index.json"),
                 Map.entry("AGENT_WORKSPACE_ROOT", "./test-workspace")
@@ -111,6 +114,7 @@ class SecretConfigurationTest {
         assertThat(environment.getProperty("agent.kimi.max-tool-rounds")).isEqualTo("7");
         assertThat(environment.getProperty("agent.kimi.history-limit")).isEqualTo("30");
         assertThat(environment.getProperty("agent.memory.file")).isEqualTo("data/test-memory.jsonl");
+        assertThat(environment.getProperty("agent.memory.repository")).isEqualTo("jdbc");
         assertThat(environment.getProperty("agent.rag.index-file")).isEqualTo("data/test-rag-index.json");
         assertThat(environment.getProperty("agent.tools.security.workspace-root")).isEqualTo("./test-workspace");
     }

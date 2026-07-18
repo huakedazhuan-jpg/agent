@@ -100,16 +100,18 @@ public class JdbcAgentTraceRepository implements AgentTraceRepository {
     }
 
     @Override
-    public void addEvent(String traceId, AgentTraceEvent event) {
+    public synchronized void addEvent(String traceId, AgentTraceEvent event) {
         if (!exists(traceId)) {
             return;
         }
+        int eventIndex = nextEventIndex(traceId);
         jdbcTemplate.update("""
                 INSERT INTO agent_trace_events (
                     id,
                     trace_id,
                     event_type,
                     status,
+                    event_index,
                     step,
                     tool_name,
                     success,
@@ -124,6 +126,7 @@ public class JdbcAgentTraceRepository implements AgentTraceRepository {
                     :traceId,
                     :eventType,
                     :status,
+                    :eventIndex,
                     :step,
                     :toolName,
                     :success,
@@ -139,6 +142,7 @@ public class JdbcAgentTraceRepository implements AgentTraceRepository {
                         .addValue("traceId", traceId)
                         .addValue("eventType", event.type().name())
                         .addValue("status", "RECORDED")
+                        .addValue("eventIndex", eventIndex)
                         .addValue("step", event.step())
                         .addValue("toolName", event.toolName())
                         .addValue("success", event.success())
@@ -150,7 +154,7 @@ public class JdbcAgentTraceRepository implements AgentTraceRepository {
     }
 
     @Override
-    public void finish(String traceId, TraceStatus status) {
+    public synchronized void finish(String traceId, TraceStatus status) {
         jdbcTemplate.update("""
                 UPDATE agent_traces
                 SET status = :status,
@@ -172,6 +176,17 @@ public class JdbcAgentTraceRepository implements AgentTraceRepository {
                 new MapSqlParameterSource("traceId", traceId),
                 Integer.class);
         return count != null && count > 0;
+    }
+
+    private int nextEventIndex(String traceId) {
+        Integer maxIndex = jdbcTemplate.queryForObject("""
+                SELECT COALESCE(MAX(event_index), -1)
+                FROM agent_trace_events
+                WHERE trace_id = :traceId
+                """,
+                new MapSqlParameterSource("traceId", traceId),
+                Integer.class);
+        return maxIndex == null ? 0 : maxIndex + 1;
     }
 
     private AgentTrace mapTrace(ResultSet rs, int rowNum) throws SQLException {
@@ -210,7 +225,7 @@ public class JdbcAgentTraceRepository implements AgentTraceRepository {
                        payload
                 FROM agent_trace_events
                 WHERE trace_id = :traceId
-                ORDER BY created_at ASC, id ASC
+                ORDER BY event_index ASC, created_at ASC, id ASC
                 """,
                 new MapSqlParameterSource("traceId", traceId),
                 this::mapEvent);

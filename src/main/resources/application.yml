@@ -55,6 +55,7 @@ agent:
     max-tool-rounds: ${AGENT_KIMI_MAX_TOOL_ROUNDS:5}
     history-limit: ${AGENT_KIMI_HISTORY_LIMIT:20}
   memory:
+    repository: ${AGENT_MEMORY_REPOSITORY:file}
     file: ${AGENT_MEMORY_FILE:data/chat-memory.jsonl}
   rag:
     index-file: ${AGENT_RAG_INDEX_FILE:data/rag-index.json}

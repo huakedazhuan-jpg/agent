@@ -34,7 +34,7 @@ Spring AI is pinned to the stable 1.1.x line because this project currently stay
   - Current limitation: it emits lifecycle events and the final answer, but does not yet implement true token-by-token Agent Runtime streaming.
 - Agent trace with in-memory local adapter and optional PostgreSQL JDBC repository
 - Tool confirmation queue prototype
-- JSONL-backed persistent chat memory prototype
+- Chat memory with JSONL local adapter and optional PostgreSQL JDBC repository
 - Tool registry with safety checks:
   - write a file inside the configured workspace
   - execute only explicitly allowed local commands
@@ -135,6 +135,7 @@ REDIS_TIMEOUT=2s
 SPRING_FLYWAY_ENABLED=false
 
 AGENT_TRACE_REPOSITORY=memory
+AGENT_MEMORY_REPOSITORY=file
 AGENT_MEMORY_FILE=data/chat-memory.jsonl
 AGENT_RAG_INDEX_FILE=data/rag-index.json
 AGENT_WORKSPACE_ROOT=./workspace
@@ -167,7 +168,13 @@ To store Agent trace state in PostgreSQL instead of memory, also set:
 $env:AGENT_TRACE_REPOSITORY = "jdbc"
 ```
 
-The default remains `memory` for fast local tests and development startup. The `prod` profile rejects this default and requires `AGENT_TRACE_REPOSITORY=jdbc`.
+To store chat memory in PostgreSQL instead of the local JSONL file, set:
+
+```powershell
+$env:AGENT_MEMORY_REPOSITORY = "jdbc"
+```
+
+The defaults remain `AGENT_TRACE_REPOSITORY=memory` and `AGENT_MEMORY_REPOSITORY=file` for fast local tests and development startup. The `prod` profile rejects these defaults and requires both repositories to use `jdbc`.
 
 See `docs/infrastructure.md` for the current infrastructure boundary.
 
@@ -301,7 +308,7 @@ Handles Feishu URL verification and `im.message.receive_v1` events.
 The following gaps are intentional tracking items for the production-grade upgrade:
 
 - No multi-user authentication or object-level authorization yet.
-- PostgreSQL/Redis/Flyway infrastructure exists, and Agent trace has a JDBC repository switch. Chat memory, tool approvals, and Feishu inbox still need durable runtime wiring.
+- PostgreSQL/Redis/Flyway infrastructure exists, and Agent trace/chat memory have JDBC repository switches. Tool approvals and Feishu inbox still need durable runtime wiring.
 - Agent streaming is not yet true token-by-token runtime streaming.
 - Tool confirmation is not yet a durable production approval workflow.
 - RAG is still local/file-backed, not pgvector hybrid retrieval.

@@ -1,6 +1,6 @@
 # Infrastructure
 
-This phase introduces baseline durable infrastructure. Agent trace can now use PostgreSQL through a JDBC repository, while some runtime state still uses prototype adapters such as JSONL chat memory and in-memory tool approval state.
+This phase introduces baseline durable infrastructure. Agent trace and chat memory can now use PostgreSQL through JDBC repositories, while some runtime state still uses prototype adapters such as in-memory tool approval state.
 
 ## Services
 
@@ -62,8 +62,14 @@ Agent trace can now use PostgreSQL:
 AGENT_TRACE_REPOSITORY=jdbc
 ```
 
-The default remains `memory` so local tests and development startup do not require a running database. Chat memory, tool approvals, and Feishu event inbox wiring remain planned Phase 2 work.
+Chat memory can now use PostgreSQL:
+
+```properties
+AGENT_MEMORY_REPOSITORY=jdbc
+```
+
+The defaults remain `AGENT_TRACE_REPOSITORY=memory` and `AGENT_MEMORY_REPOSITORY=file` so local tests and development startup do not require a running database. Tool approval and Feishu event inbox wiring remain planned Phase 2 work.
 
 ## Current safety boundary
 
-The local default passwords in `.env.example` and `docker-compose.yml` are only for development. Production must provide explicit database and Redis credentials through environment variables or a secret manager. Production also must enable Flyway and set `AGENT_TRACE_REPOSITORY=jdbc`.
+The local default passwords in `.env.example` and `docker-compose.yml` are only for development. Production must provide explicit database and Redis credentials through environment variables or a secret manager. Production also must enable Flyway and set `AGENT_TRACE_REPOSITORY=jdbc` and `AGENT_MEMORY_REPOSITORY=jdbc`.
