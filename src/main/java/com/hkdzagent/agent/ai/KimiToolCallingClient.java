@@ -20,7 +20,6 @@ import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -56,55 +55,93 @@ public class KimiToolCallingClient {
     private final int maxTokens;
     private final Duration requestTimeout;
     private final int maxToolRounds;
+    private final int historyLimit;
     private final Function<ToolRegistryConfig.FileRequest, String> fileOperationTool;
     private final Function<ToolRegistryConfig.CommandRequest, String> commandExecuteTool;
     private final Function<ToolRegistryConfig.WebRequest, String> httpRequestTool;
     private final Function<ToolRegistryConfig.KnowledgeRequest, String> knowledgeSearchTool;
 
-    public KimiToolCallingClient(
-            ObjectMapper objectMapper,
-            ChatMemory chatMemory,
-            @Value("${spring.ai.openai.api-key}") String apiKey,
-            @Value("${spring.ai.openai.base-url}") String baseUrl,
-            @Value("${spring.ai.openai.chat.options.model:kimi-k2.5}") String model,
-            @Value("${spring.ai.openai.chat.options.temperature:1}") double temperature,
-            @Value("${spring.ai.openai.chat.options.max-tokens:16000}") int maxTokens,
-            @Value("${agent.kimi.request-timeout:60s}") Duration requestTimeout,
-            @Value("${agent.kimi.max-tool-rounds:5}") int maxToolRounds,
-            @Qualifier("fileOperationTool") Function<ToolRegistryConfig.FileRequest, String> fileOperationTool,
-            @Qualifier("commandExecuteTool") Function<ToolRegistryConfig.CommandRequest, String> commandExecuteTool,
-            @Qualifier("httpRequestTool") Function<ToolRegistryConfig.WebRequest, String> httpRequestTool
-    ) {
-        this(objectMapper, chatMemory, apiKey, baseUrl, model, temperature, maxTokens, requestTimeout,
-                maxToolRounds, fileOperationTool, commandExecuteTool, httpRequestTool,
-                request -> "knowledge search unavailable: no local RAG knowledge base is configured");
-    }
-
     @Autowired
     public KimiToolCallingClient(
             ObjectMapper objectMapper,
             ChatMemory chatMemory,
-            @Value("${spring.ai.openai.api-key}") String apiKey,
-            @Value("${spring.ai.openai.base-url}") String baseUrl,
-            @Value("${spring.ai.openai.chat.options.model:kimi-k2.5}") String model,
-            @Value("${spring.ai.openai.chat.options.temperature:1}") double temperature,
-            @Value("${spring.ai.openai.chat.options.max-tokens:16000}") int maxTokens,
-            @Value("${agent.kimi.request-timeout:60s}") Duration requestTimeout,
-            @Value("${agent.kimi.max-tool-rounds:5}") int maxToolRounds,
+            OpenAiCompatibleProperties modelProperties,
+            KimiProperties kimiProperties,
             @Qualifier("fileOperationTool") Function<ToolRegistryConfig.FileRequest, String> fileOperationTool,
             @Qualifier("commandExecuteTool") Function<ToolRegistryConfig.CommandRequest, String> commandExecuteTool,
             @Qualifier("httpRequestTool") Function<ToolRegistryConfig.WebRequest, String> httpRequestTool,
             @Qualifier("knowledgeSearchTool") Function<ToolRegistryConfig.KnowledgeRequest, String> knowledgeSearchTool
     ) {
+        this(objectMapper, chatMemory, modelProperties.apiKey(), modelProperties.completionsUri(),
+                modelProperties.model(), modelProperties.temperature(), modelProperties.maxTokens(),
+                kimiProperties.requestTimeout(), kimiProperties.maxToolRounds(), kimiProperties.historyLimit(),
+                fileOperationTool, commandExecuteTool, httpRequestTool, knowledgeSearchTool);
+    }
+
+    public KimiToolCallingClient(
+            ObjectMapper objectMapper,
+            ChatMemory chatMemory,
+            String apiKey,
+            String baseUrl,
+            String model,
+            double temperature,
+            int maxTokens,
+            Duration requestTimeout,
+            int maxToolRounds,
+            @Qualifier("fileOperationTool") Function<ToolRegistryConfig.FileRequest, String> fileOperationTool,
+            @Qualifier("commandExecuteTool") Function<ToolRegistryConfig.CommandRequest, String> commandExecuteTool,
+            @Qualifier("httpRequestTool") Function<ToolRegistryConfig.WebRequest, String> httpRequestTool,
+            @Qualifier("knowledgeSearchTool") Function<ToolRegistryConfig.KnowledgeRequest, String> knowledgeSearchTool
+    ) {
+        this(objectMapper, chatMemory, apiKey, completionsUri(baseUrl), model, temperature, maxTokens, requestTimeout,
+                maxToolRounds, 20, fileOperationTool, commandExecuteTool, httpRequestTool, knowledgeSearchTool);
+    }
+
+    public KimiToolCallingClient(
+            ObjectMapper objectMapper,
+            ChatMemory chatMemory,
+            String apiKey,
+            String baseUrl,
+            String model,
+            double temperature,
+            int maxTokens,
+            Duration requestTimeout,
+            int maxToolRounds,
+            @Qualifier("fileOperationTool") Function<ToolRegistryConfig.FileRequest, String> fileOperationTool,
+            @Qualifier("commandExecuteTool") Function<ToolRegistryConfig.CommandRequest, String> commandExecuteTool,
+            @Qualifier("httpRequestTool") Function<ToolRegistryConfig.WebRequest, String> httpRequestTool
+    ) {
+        this(objectMapper, chatMemory, apiKey, completionsUri(baseUrl), model, temperature, maxTokens, requestTimeout,
+                maxToolRounds, 20, fileOperationTool, commandExecuteTool, httpRequestTool,
+                request -> "knowledge search unavailable: no local RAG knowledge base is configured");
+    }
+
+    private KimiToolCallingClient(
+            ObjectMapper objectMapper,
+            ChatMemory chatMemory,
+            String apiKey,
+            URI completionsUri,
+            String model,
+            double temperature,
+            int maxTokens,
+            Duration requestTimeout,
+            int maxToolRounds,
+            int historyLimit,
+            Function<ToolRegistryConfig.FileRequest, String> fileOperationTool,
+            Function<ToolRegistryConfig.CommandRequest, String> commandExecuteTool,
+            Function<ToolRegistryConfig.WebRequest, String> httpRequestTool,
+            Function<ToolRegistryConfig.KnowledgeRequest, String> knowledgeSearchTool
+    ) {
         this.objectMapper = objectMapper;
         this.chatMemory = chatMemory;
         this.apiKey = apiKey;
-        this.completionsUri = completionsUri(baseUrl);
+        this.completionsUri = completionsUri;
         this.model = model;
         this.temperature = temperature;
         this.maxTokens = maxTokens;
         this.requestTimeout = requestTimeout;
         this.maxToolRounds = maxToolRounds;
+        this.historyLimit = historyLimit;
         this.fileOperationTool = fileOperationTool;
         this.commandExecuteTool = commandExecuteTool;
         this.httpRequestTool = httpRequestTool;
@@ -198,7 +235,7 @@ public class KimiToolCallingClient {
         List<ObjectNode> messages = new ArrayList<>();
         messages.add(message("system", SYSTEM_PROMPT));
 
-        for (Message message : lastMessages(chatMemory.get(conversationId), 20)) {
+        for (Message message : lastMessages(chatMemory.get(conversationId), historyLimit)) {
             ObjectNode historyMessage = historyMessage(message);
             if (historyMessage != null) {
                 messages.add(historyMessage);
@@ -377,7 +414,7 @@ public class KimiToolCallingClient {
         return parameters;
     }
 
-    private URI completionsUri(String baseUrl) {
+    private static URI completionsUri(String baseUrl) {
         String normalized = baseUrl == null ? "" : baseUrl.strip();
         while (normalized.endsWith("/")) {
             normalized = normalized.substring(0, normalized.length() - 1);

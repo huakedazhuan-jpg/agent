@@ -4,8 +4,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonPropertyDescription;
 import com.hkdzagent.agent.rag.KnowledgeSearchTool;
 import com.hkdzagent.agent.rag.LocalKnowledgeBase;
+import com.hkdzagent.agent.rag.RagProperties;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -15,7 +15,11 @@ import java.nio.file.Path;
 import java.util.function.Function;
 
 @Configuration
-@EnableConfigurationProperties(ToolSecurityProperties.class)
+@EnableConfigurationProperties({
+        ToolSecurityProperties.class,
+        TavilyProperties.class,
+        RagProperties.class
+})
 public class ToolRegistryConfig {
 
     private final ToolExecutionSupport executionSupport;
@@ -27,8 +31,23 @@ public class ToolRegistryConfig {
 
     @Autowired
     public ToolRegistryConfig(
-            @Value("${tavily.api-key}") String tavilyApiKey,
-            @Value("${agent.rag.index-file:data/rag-index.json}") String ragIndexFile,
+            TavilyProperties tavilyProperties,
+            RagProperties ragProperties,
+            ToolSecurityProperties securityProperties
+    ) {
+        this(tavilyProperties.apiKey(), ragProperties.indexFile(), securityProperties);
+    }
+
+    public ToolRegistryConfig(
+            String tavilyApiKey,
+            ToolSecurityProperties securityProperties
+    ) {
+        this(tavilyApiKey, Path.of("data/rag-index.json"), securityProperties);
+    }
+
+    public ToolRegistryConfig(
+            String tavilyApiKey,
+            Path ragIndexFile,
             ToolSecurityProperties securityProperties
     ) {
         ToolPermissionService permissionService = new ToolPermissionService(securityProperties);
@@ -37,14 +56,7 @@ public class ToolRegistryConfig {
         this.commandTool = new CommandExecuteTool(permissionService);
         this.httpTool = new HttpRequestTool(permissionService);
         this.searchTool = new WebSearchTool(tavilyApiKey);
-        this.knowledgeSearchTool = new KnowledgeSearchTool(new LocalKnowledgeBase(Path.of(ragIndexFile)));
-    }
-
-    public ToolRegistryConfig(
-            String tavilyApiKey,
-            ToolSecurityProperties securityProperties
-    ) {
-        this(tavilyApiKey, "data/rag-index.json", securityProperties);
+        this.knowledgeSearchTool = new KnowledgeSearchTool(new LocalKnowledgeBase(ragIndexFile));
     }
 
     public record FileRequest(

@@ -2,7 +2,6 @@ package com.hkdzagent.agent.im;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -22,11 +21,9 @@ public class FeishuTenantTokenProvider {
     private FeishuTenantAccessToken cachedToken;
 
     @Autowired
-    public FeishuTenantTokenProvider(
-            @Value("${feishu.app-id}") String appId,
-            @Value("${feishu.app-secret}") String appSecret
-    ) {
-        this(() -> fetchToken(appId, appSecret, RestClient.create()), Clock.systemUTC(), Duration.ofMinutes(2));
+    public FeishuTenantTokenProvider(FeishuProperties properties) {
+        this(() -> fetchToken(properties.appId(), properties.appSecret(), RestClient.create()),
+                Clock.systemUTC(), Duration.ofMinutes(2));
     }
 
     public FeishuTenantTokenProvider(

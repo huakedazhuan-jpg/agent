@@ -2,7 +2,7 @@ package com.hkdzagent.agent.im;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -18,10 +18,12 @@ public class FeishuSignatureVerifier {
     private final String encryptKey;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public FeishuSignatureVerifier(
-            @Value("${feishu.verification-token:}") String verificationToken,
-            @Value("${feishu.encrypt-key:}") String encryptKey
-    ) {
+    @Autowired
+    public FeishuSignatureVerifier(FeishuProperties properties) {
+        this(properties.verificationToken(), properties.encryptKey());
+    }
+
+    public FeishuSignatureVerifier(String verificationToken, String encryptKey) {
         this.verificationToken = normalize(verificationToken);
         this.encryptKey = normalize(encryptKey);
     }

@@ -100,18 +100,31 @@ MOONSHOT_API_KEY=
 MOONSHOT_BASE_URL=https://api.moonshot.ai
 MOONSHOT_MODEL=kimi-k2.5
 MOONSHOT_TEMPERATURE=1
+MOONSHOT_MAX_TOKENS=16000
+
+AGENT_KIMI_REQUEST_TIMEOUT=60s
+AGENT_KIMI_MAX_TOOL_ROUNDS=5
+AGENT_KIMI_HISTORY_LIMIT=20
 
 FEISHU_APP_ID=
 FEISHU_APP_SECRET=
 FEISHU_VERIFICATION_TOKEN=
 FEISHU_ENCRYPT_KEY=
+FEISHU_ASYNC_CORE_SIZE=2
+FEISHU_ASYNC_MAX_SIZE=4
+FEISHU_ASYNC_QUEUE_CAPACITY=100
 
 TAVILY_API_KEY=
 
+AGENT_MEMORY_FILE=data/chat-memory.jsonl
+AGENT_RAG_INDEX_FILE=data/rag-index.json
 AGENT_WORKSPACE_ROOT=./workspace
 ```
 
 Do not commit `.env` or any real credentials.
+
+Application configuration is bound through typed `@ConfigurationProperties` classes instead of scattered
+`@Value` injection. This keeps runtime settings auditable and easier to validate as the project grows.
 
 ## Build, Test, and Run
 

@@ -11,16 +11,29 @@ spring:
         options:
           model: ${MOONSHOT_MODEL:kimi-k2.5}
           temperature: ${MOONSHOT_TEMPERATURE:1}
+          max-tokens: ${MOONSHOT_MAX_TOKENS:16000}
 
 feishu:
   app-id: ${FEISHU_APP_ID}
   app-secret: ${FEISHU_APP_SECRET}
   verification-token: ${FEISHU_VERIFICATION_TOKEN:}
   encrypt-key: ${FEISHU_ENCRYPT_KEY:}
+  async:
+    core-size: ${FEISHU_ASYNC_CORE_SIZE:2}
+    max-size: ${FEISHU_ASYNC_MAX_SIZE:4}
+    queue-capacity: ${FEISHU_ASYNC_QUEUE_CAPACITY:100}
 
 tavily:
   api-key: ${TAVILY_API_KEY}
 agent:
+  kimi:
+    request-timeout: ${AGENT_KIMI_REQUEST_TIMEOUT:60s}
+    max-tool-rounds: ${AGENT_KIMI_MAX_TOOL_ROUNDS:5}
+    history-limit: ${AGENT_KIMI_HISTORY_LIMIT:20}
+  memory:
+    file: ${AGENT_MEMORY_FILE:data/chat-memory.jsonl}
+  rag:
+    index-file: ${AGENT_RAG_INDEX_FILE:data/rag-index.json}
   tools:
     security:
       workspace-root: ${AGENT_WORKSPACE_ROOT:./workspace}
