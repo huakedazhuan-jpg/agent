@@ -22,7 +22,12 @@ public class ProductionConfigurationValidator implements InitializingBean {
             "feishu.verification-token",
             "feishu.encrypt-key",
             "tavily.api-key",
-            "agent.tools.security.workspace-root"
+            "agent.tools.security.workspace-root",
+            "spring.datasource.url",
+            "spring.datasource.username",
+            "spring.datasource.password",
+            "spring.data.redis.host",
+            "spring.data.redis.password"
     );
 
     private final Environment environment;
@@ -44,6 +49,11 @@ public class ProductionConfigurationValidator implements InitializingBean {
         if (usesDefaultWorkspaceRoot()) {
             unsafeProperties = new ArrayList<>(unsafeProperties);
             unsafeProperties.add("agent.tools.security.workspace-root must be explicit in prod");
+        }
+
+        if (!flywayEnabled()) {
+            unsafeProperties = new ArrayList<>(unsafeProperties);
+            unsafeProperties.add("spring.flyway.enabled must be true in prod");
         }
 
         if (!unsafeProperties.isEmpty()) {
@@ -69,7 +79,8 @@ public class ProductionConfigurationValidator implements InitializingBean {
                 || normalized.equals("placeholder")
                 || normalized.startsWith("test-")
                 || normalized.startsWith("dummy-")
-                || normalized.startsWith("your-");
+                || normalized.startsWith("your-")
+                || normalized.startsWith("xingclaw-local-");
     }
 
     private boolean usesDefaultWorkspaceRoot() {
@@ -81,5 +92,9 @@ public class ProductionConfigurationValidator implements InitializingBean {
         return normalized.equals(".")
                 || normalized.equals("./workspace")
                 || normalized.equals("workspace");
+    }
+
+    private boolean flywayEnabled() {
+        return environment.getProperty("spring.flyway.enabled", Boolean.class, false);
     }
 }

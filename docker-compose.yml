@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: xingclaw-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-xingclaw_agent}
+      POSTGRES_USER: ${POSTGRES_USER:-xingclaw_agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-xingclaw-local-password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:8-alpine
+    container_name: xingclaw-redis
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-xingclaw-local-redis}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-xingclaw-local-redis}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
+  redis-data:

@@ -43,6 +43,7 @@ Spring AI is pinned to the stable 1.1.x line because this project currently stay
   - search the local knowledge base
 - Local RAG prototype based on file-backed knowledge search
 - Feishu webhook endpoint with URL verification, signature verification hook, event deduplication, async processing, token provider, and reply client prototypes
+- Baseline PostgreSQL, Redis, Docker Compose, and Flyway migration skeleton
 
 ## Project Structure
 
@@ -69,6 +70,7 @@ src/test/java
 
 docs/
   Design notes and future architecture documents
+  Infrastructure and quality gate documentation
 
 verification/
   Isolated Spring AI compatibility checks
@@ -116,6 +118,22 @@ FEISHU_ASYNC_QUEUE_CAPACITY=100
 
 TAVILY_API_KEY=
 
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=xingclaw_agent
+POSTGRES_USER=xingclaw_agent
+POSTGRES_PASSWORD=xingclaw-local-password
+POSTGRES_MAX_POOL_SIZE=10
+POSTGRES_MIN_IDLE=1
+POSTGRES_CONNECTION_TIMEOUT_MS=2000
+
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=xingclaw-local-redis
+REDIS_TIMEOUT=2s
+
+SPRING_FLYWAY_ENABLED=false
+
 AGENT_MEMORY_FILE=data/chat-memory.jsonl
 AGENT_RAG_INDEX_FILE=data/rag-index.json
 AGENT_WORKSPACE_ROOT=./workspace
@@ -125,6 +143,24 @@ Do not commit `.env` or any real credentials.
 
 Application configuration is bound through typed `@ConfigurationProperties` classes instead of scattered
 `@Value` injection. This keeps runtime settings auditable and easier to validate as the project grows.
+
+## Local Infrastructure
+
+Start PostgreSQL and Redis:
+
+```powershell
+docker compose up -d postgres redis
+```
+
+Flyway is included but disabled by default so tests and local startup do not require a running database.
+To apply migrations locally, start PostgreSQL first and then set:
+
+```powershell
+$env:SPRING_FLYWAY_ENABLED = "true"
+.\mvnw.cmd spring-boot:run
+```
+
+See `docs/infrastructure.md` for the current infrastructure boundary.
 
 ## Build, Test, and Run
 
@@ -254,7 +290,7 @@ Handles Feishu URL verification and `im.message.receive_v1` events.
 The following gaps are intentional tracking items for the production-grade upgrade:
 
 - No multi-user authentication or object-level authorization yet.
-- No PostgreSQL/Redis-backed durable runtime state yet.
+- PostgreSQL/Redis/Flyway infrastructure exists, but runtime state is not yet migrated from prototype storage.
 - Agent streaming is not yet true token-by-token runtime streaming.
 - Agent trace and tool confirmation are not yet durable production workflows.
 - RAG is still local/file-backed, not pgvector hybrid retrieval.
@@ -270,7 +306,7 @@ The project is being upgraded in staged phases:
 
 1. Engineering baseline, Git, environment template, README cleanup
 2. Dependency upgrade and configuration fail-fast checks
-3. PostgreSQL, Redis, and database migrations
+3. PostgreSQL, Redis, database migrations, and durable state migration
 4. Authentication, JWT, RBAC, and object-level authorization
 5. Agent Runtime state machine and real SSE streaming
 6. Tool system, approval workflow, and human-in-the-loop safety
