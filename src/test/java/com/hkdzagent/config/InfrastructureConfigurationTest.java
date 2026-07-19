@@ -154,6 +154,24 @@ class InfrastructureConfigurationTest {
     }
 
     @Test
+    void sixthFlywayMigrationAddsUsersRolesAndNormalizedUsernameUniqueness() throws IOException {
+        Path migration = PROJECT_ROOT.resolve(
+                "src/main/resources/db/migration/postgresql/V6__users_and_roles.sql"
+        );
+        String sql = Files.readString(migration);
+
+        assertThat(sql).contains(
+                "CREATE TABLE app_users",
+                "CREATE UNIQUE INDEX ux_app_users_normalized_username",
+                "ON app_users (lower(username))",
+                "CREATE TABLE app_roles",
+                "CREATE TABLE app_user_roles",
+                "REFERENCES app_users (id) ON DELETE CASCADE",
+                "VALUES ('USER'), ('ADMIN')"
+        );
+    }
+
+    @Test
     void environmentTemplateDocumentsInfrastructureSettings() throws IOException {
         String envExample = Files.readString(PROJECT_ROOT.resolve(".env.example"));
 
@@ -169,7 +187,12 @@ class InfrastructureConfigurationTest {
                 "AGENT_TOOL_APPROVAL_TTL=15m",
                 "AGENT_MEMORY_REPOSITORY=file",
                 "FEISHU_INBOX_REPOSITORY=memory",
-                "FEISHU_INBOX_MAX_ATTEMPTS=3"
+                "FEISHU_INBOX_MAX_ATTEMPTS=3",
+                "AGENT_SECURITY_ENABLED=false",
+                "AGENT_SECURITY_USER_REPOSITORY=memory",
+                "AGENT_SECURITY_JWT_SECRET=",
+                "AGENT_SECURITY_BOOTSTRAP_USERNAME=",
+                "AGENT_SECURITY_BOOTSTRAP_PASSWORD="
         );
     }
 

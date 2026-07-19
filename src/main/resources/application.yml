@@ -55,6 +55,17 @@ feishu:
 tavily:
   api-key: ${TAVILY_API_KEY}
 agent:
+  security:
+    enabled: ${AGENT_SECURITY_ENABLED:false}
+    user-repository: ${AGENT_SECURITY_USER_REPOSITORY:memory}
+    jwt:
+      issuer: ${AGENT_SECURITY_JWT_ISSUER:xingclaw-agent}
+      secret: ${AGENT_SECURITY_JWT_SECRET:}
+      ttl: ${AGENT_SECURITY_JWT_TTL:1h}
+    bootstrap:
+      username: ${AGENT_SECURITY_BOOTSTRAP_USERNAME:}
+      password: ${AGENT_SECURITY_BOOTSTRAP_PASSWORD:}
+      role: ${AGENT_SECURITY_BOOTSTRAP_ROLE:ADMIN}
   trace:
     repository: ${AGENT_TRACE_REPOSITORY:memory}
   tool-approval:

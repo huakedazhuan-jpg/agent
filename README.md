@@ -2,7 +2,7 @@
 
 XingClaw Agent is a Spring Boot based AI agent project. It is currently an engineering prototype being upgraded into a production-grade resume project.
 
-The current codebase can compile and pass tests, but it should not yet be described as production-ready. Important production capabilities such as persistent multi-user identity, real token-by-token Agent Runtime streaming, approval-gated tool execution, Docker deployment, and observability are still planned work.
+The current codebase can compile and pass tests, but it should not yet be described as production-ready. A persistent JWT/RBAC baseline now exists; object ownership, real token-by-token Agent Runtime streaming, approval-gated tool execution, Docker deployment, and observability are still planned work.
 
 ## Current Status
 
@@ -23,6 +23,7 @@ The current codebase can compile and pass tests, but it should not yet be descri
 - Reactor `Flux` for SSE responses
 - Static HTML console
 - Feishu OpenAPI integration prototype
+- Spring Security OAuth2 Resource Server with HMAC-signed JWT access tokens
 
 Spring AI is pinned to the stable 1.1.x line because this project currently stays on Spring Boot 3.x. Spring AI 2.x targets Spring Boot 4.x.
 
@@ -44,6 +45,7 @@ Spring AI is pinned to the stable 1.1.x line because this project currently stay
 - Local RAG prototype based on file-backed knowledge search
 - Feishu webhook endpoint with URL verification, signature verification, durable event inbox option, async retry processing, token provider, and reply client
 - Baseline PostgreSQL, Redis, Docker Compose, and Flyway migration skeleton
+- Optional JWT authentication with JDBC users, BCrypt password hashes, and `USER`/`ADMIN` RBAC
 
 ## Project Structure
 
@@ -57,6 +59,7 @@ src/main/java/com/hkdzagent/agent
   memory/         JSONL-backed chat memory
   model/          Request/response records
   rag/            Local knowledge base and search tool
+  security/       JWT authentication, users, bootstrap account, and RBAC policy
   tool/           Tool registration and safety checks
   trace/          Agent trace prototype
 
@@ -147,6 +150,15 @@ AGENT_MEMORY_REPOSITORY=file
 AGENT_MEMORY_FILE=data/chat-memory.jsonl
 AGENT_RAG_INDEX_FILE=data/rag-index.json
 AGENT_WORKSPACE_ROOT=./workspace
+
+AGENT_SECURITY_ENABLED=false
+AGENT_SECURITY_USER_REPOSITORY=memory
+AGENT_SECURITY_JWT_ISSUER=xingclaw-agent
+AGENT_SECURITY_JWT_SECRET=
+AGENT_SECURITY_JWT_TTL=1h
+AGENT_SECURITY_BOOTSTRAP_USERNAME=
+AGENT_SECURITY_BOOTSTRAP_PASSWORD=
+AGENT_SECURITY_BOOTSTRAP_ROLE=ADMIN
 ```
 
 Do not commit `.env` or any real credentials.
@@ -191,6 +203,19 @@ $env:AGENT_TOOL_APPROVAL_REPOSITORY = "jdbc"
 The defaults remain `AGENT_TRACE_REPOSITORY=memory`, `AGENT_MEMORY_REPOSITORY=file`, and `AGENT_TOOL_APPROVAL_REPOSITORY=memory` for fast local tests and development startup. The `prod` profile rejects these defaults and requires all three repositories to use `jdbc`.
 
 To persist and recover Feishu Webhook processing, set `FEISHU_INBOX_REPOSITORY=jdbc`. Production also requires this setting; local development defaults to memory.
+
+To exercise authentication locally, apply Flyway migrations and set:
+
+```powershell
+$env:AGENT_SECURITY_ENABLED = "true"
+$env:AGENT_SECURITY_USER_REPOSITORY = "jdbc"
+$env:AGENT_SECURITY_JWT_SECRET = "replace-with-at-least-32-random-bytes"
+$env:AGENT_SECURITY_BOOTSTRAP_USERNAME = "admin"
+$env:AGENT_SECURITY_BOOTSTRAP_PASSWORD = "replace-with-a-strong-password"
+$env:AGENT_SECURITY_BOOTSTRAP_ROLE = "ADMIN"
+```
+
+The bootstrap account is inserted only when the username does not already exist; startup does not overwrite its password. See `docs/security.md` for endpoint policy and current limitations.
 
 See `docs/infrastructure.md` for the current infrastructure boundary.
 
@@ -311,6 +336,19 @@ POST /api/agent/tool-confirmations/{confirmationId}/reject
 
 Approval records can be persisted in PostgreSQL, expire after a configurable TTL, and use atomic pending-state decisions. Current limitation: tool execution is not yet paused and resumed by this approval state, so the end-to-end human-in-the-loop workflow is not complete.
 
+### Authentication and RBAC
+
+```text
+POST /api/auth/login     public; returns a Bearer access token
+GET  /api/auth/me        authenticated
+/api/agent/**            authenticated
+approve/reject endpoints ADMIN only
+/test/**                 ADMIN only
+POST /api/feishu/webhook public; protected by Feishu verification/signature checks
+```
+
+Authentication is disabled by default for zero-configuration local development. The `prod` profile fails at startup unless authentication is enabled, users use PostgreSQL, and the JWT secret contains at least 32 bytes.
+
 ### Feishu Webhook
 
 ```text
@@ -323,7 +361,8 @@ Handles Feishu URL verification and `im.message.receive_v1` events. The optional
 
 The following gaps are intentional tracking items for the production-grade upgrade:
 
-- No multi-user authentication or object-level authorization yet.
+- JWT authentication and coarse `USER`/`ADMIN` RBAC exist, but object-level ownership checks are not implemented yet.
+- Access tokens currently have no refresh, revocation, key rotation, or login rate limiting.
 - PostgreSQL/Redis/Flyway infrastructure exists, and Agent trace/chat memory/tool approvals/Feishu inbox have JDBC repository switches.
 - Agent streaming is not yet true token-by-token runtime streaming.
 - Tool approval persistence is durable, but approval is not yet connected to pause/resume tool execution.
@@ -340,7 +379,7 @@ The project is being upgraded in staged phases:
 1. Engineering baseline, Git, environment template, README cleanup
 2. Dependency upgrade and configuration fail-fast checks
 3. PostgreSQL, Redis, database migrations, and durable state migration
-4. Authentication, JWT, RBAC, and object-level authorization
+4. Authentication, JWT, and RBAC baseline; object-level authorization remains
 5. Agent Runtime state machine and real SSE streaming
 6. Tool system, approval workflow, and human-in-the-loop safety
 7. pgvector RAG with hybrid retrieval, citations, and evaluation

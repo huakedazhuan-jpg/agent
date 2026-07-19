@@ -7,6 +7,7 @@ import com.hkdzagent.agent.ai.OpenAiCompatibleProperties;
 import com.hkdzagent.agent.console.ToolConfirmationProperties;
 import com.hkdzagent.agent.im.FeishuProperties;
 import com.hkdzagent.agent.rag.RagProperties;
+import com.hkdzagent.agent.security.AgentSecurityProperties;
 import com.hkdzagent.agent.tool.TavilyProperties;
 import com.hkdzagent.agent.trace.AgentTraceProperties;
 import org.junit.jupiter.api.Test;
@@ -56,7 +57,7 @@ class ApplicationPropertiesBindingTest {
     }
 
     @Test
-    void bindsMemoryRagTavilyTraceAndFeishuProperties() {
+    void bindsMemoryRagTavilyTraceFeishuAndSecurityProperties() {
         MockEnvironment environment = new MockEnvironment()
                 .withProperty("agent.memory.file", "data/test-memory.jsonl")
                 .withProperty("agent.memory.repository", "jdbc")
@@ -64,6 +65,14 @@ class ApplicationPropertiesBindingTest {
                 .withProperty("agent.trace.repository", "jdbc")
                 .withProperty("agent.tool-approval.repository", "jdbc")
                 .withProperty("agent.tool-approval.ttl", "10m")
+                .withProperty("agent.security.enabled", "true")
+                .withProperty("agent.security.user-repository", "jdbc")
+                .withProperty("agent.security.jwt.issuer", "test-agent")
+                .withProperty("agent.security.jwt.secret", "test-secret")
+                .withProperty("agent.security.jwt.ttl", "45m")
+                .withProperty("agent.security.bootstrap.username", "admin")
+                .withProperty("agent.security.bootstrap.password", "strong-password")
+                .withProperty("agent.security.bootstrap.role", "ADMIN")
                 .withProperty("tavily.api-key", "tavily-api-key")
                 .withProperty("feishu.app-id", "feishu-app-id")
                 .withProperty("feishu.app-secret", "feishu-app-secret")
@@ -87,6 +96,7 @@ class ApplicationPropertiesBindingTest {
                 "agent.tool-approval",
                 ToolConfirmationProperties.class
         );
+        AgentSecurityProperties security = bind(environment, "agent.security", AgentSecurityProperties.class);
         TavilyProperties tavily = bind(environment, "tavily", TavilyProperties.class);
         FeishuProperties feishu = bind(environment, "feishu", FeishuProperties.class);
 
@@ -96,6 +106,14 @@ class ApplicationPropertiesBindingTest {
         assertThat(trace.repository()).isEqualTo("jdbc");
         assertThat(toolApproval.repository()).isEqualTo("jdbc");
         assertThat(toolApproval.ttl()).isEqualTo(Duration.ofMinutes(10));
+        assertThat(security.enabled()).isTrue();
+        assertThat(security.userRepository()).isEqualTo("jdbc");
+        assertThat(security.jwt().issuer()).isEqualTo("test-agent");
+        assertThat(security.jwt().secret()).isEqualTo("test-secret");
+        assertThat(security.jwt().ttl()).isEqualTo(Duration.ofMinutes(45));
+        assertThat(security.bootstrap().username()).isEqualTo("admin");
+        assertThat(security.bootstrap().password()).isEqualTo("strong-password");
+        assertThat(security.bootstrap().role()).isEqualTo("ADMIN");
         assertThat(tavily.apiKey()).isEqualTo("tavily-api-key");
         assertThat(feishu.appId()).isEqualTo("feishu-app-id");
         assertThat(feishu.appSecret()).isEqualTo("feishu-app-secret");

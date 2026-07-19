@@ -70,6 +70,18 @@ public class ProductionConfigurationValidator implements InitializingBean {
             unsafeProperties.add("feishu.inbox.repository must be jdbc in prod");
         }
 
+        if (!authenticationEnabled()) {
+            unsafeProperties.add("agent.security.enabled must be true in prod");
+        }
+
+        if (!jdbcUserRepositoryEnabled()) {
+            unsafeProperties.add("agent.security.user-repository must be jdbc in prod");
+        }
+
+        if (!strongJwtSecret()) {
+            unsafeProperties.add("agent.security.jwt.secret must contain at least 32 bytes in prod");
+        }
+
         if (!unsafeProperties.isEmpty()) {
             throw new IllegalStateException("Unsafe production configuration: " + String.join(", ", unsafeProperties));
         }
@@ -130,5 +142,19 @@ public class ProductionConfigurationValidator implements InitializingBean {
     private boolean jdbcFeishuInboxRepositoryEnabled() {
         String repository = environment.getProperty("feishu.inbox.repository", "");
         return "jdbc".equalsIgnoreCase(repository.trim());
+    }
+
+    private boolean authenticationEnabled() {
+        return environment.getProperty("agent.security.enabled", Boolean.class, false);
+    }
+
+    private boolean jdbcUserRepositoryEnabled() {
+        String repository = environment.getProperty("agent.security.user-repository", "");
+        return "jdbc".equalsIgnoreCase(repository.trim());
+    }
+
+    private boolean strongJwtSecret() {
+        String secret = environment.getProperty("agent.security.jwt.secret", "");
+        return secret.getBytes(java.nio.charset.StandardCharsets.UTF_8).length >= 32;
     }
 }

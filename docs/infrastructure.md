@@ -55,6 +55,7 @@ The migrations create durable-state tables for:
 - agent trace aggregate records and events
 - tool approvals
 - Feishu event inbox
+- application users, roles, and user-role assignments
 
 Agent trace can now use PostgreSQL:
 
@@ -96,4 +97,4 @@ The defaults remain `AGENT_TRACE_REPOSITORY=memory`, `AGENT_MEMORY_REPOSITORY=fi
 
 ## Current safety boundary
 
-The local default passwords in `.env.example` and `docker-compose.yml` are only for development. Production must provide explicit database and Redis credentials through environment variables or a secret manager. Production also must enable Flyway and set `AGENT_TRACE_REPOSITORY=jdbc`, `AGENT_MEMORY_REPOSITORY=jdbc`, `AGENT_TOOL_APPROVAL_REPOSITORY=jdbc`, and `FEISHU_INBOX_REPOSITORY=jdbc`.
+The local default passwords in `.env.example` and `docker-compose.yml` are only for development. Production must provide explicit database and Redis credentials through environment variables or a secret manager. Production also must enable Flyway; use JDBC for traces, memory, approvals, the Feishu inbox, and users; enable authentication; and supply a JWT secret of at least 32 bytes.
