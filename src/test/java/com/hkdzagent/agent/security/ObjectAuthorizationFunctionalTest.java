@@ -9,6 +9,11 @@ import com.hkdzagent.agent.memory.OwnedConversationId;
 import com.hkdzagent.agent.trace.AgentTraceRecorder;
 import com.hkdzagent.agent.trace.AgentTraceSanitizer;
 import com.hkdzagent.agent.trace.InMemoryAgentTraceRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hkdzagent.agent.runtime.AgentRun;
+import com.hkdzagent.agent.runtime.AgentRuntimeProperties;
+import com.hkdzagent.agent.runtime.AgentRuntimeService;
+import com.hkdzagent.agent.runtime.InMemoryAgentRunRepository;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -63,6 +68,9 @@ class ObjectAuthorizationFunctionalTest {
 
     @Autowired
     private ToolConfirmationService confirmationService;
+
+    @Autowired
+    private AgentRuntimeService runtimeService;
 
     @MockitoBean
     private LLMClient llmClient;
@@ -157,6 +165,21 @@ class ObjectAuthorizationFunctionalTest {
                 .andExpect(jsonPath("$.ownerKey").value(ActorIdentity.user(USER_A).key()));
     }
 
+    @Test
+    void userCannotReadAnotherUsersAgentRunOrReplayItsEvents() throws Exception {
+        AgentRun run = runtimeService.create(
+                ActorIdentity.user(USER_A), "shared-session", "owned-conversation",
+                "trace-run-owned-by-a", "private runtime request");
+
+        mockMvc.perform(get("/api/agent/runs/{runId}", run.runId()).with(userJwt(USER_A)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.runId").value(run.runId()));
+        mockMvc.perform(get("/api/agent/runs/{runId}", run.runId()).with(userJwt(USER_B)))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/agent/runs/{runId}/events", run.runId()).with(userJwt(USER_B)))
+                .andExpect(status().isNotFound());
+    }
+
     private org.springframework.test.web.servlet.request.RequestPostProcessor userJwt(String subject) {
         return jwt()
                 .jwt(token -> token.subject(subject).claim("roles", List.of("USER")))
@@ -202,6 +225,13 @@ class ObjectAuthorizationFunctionalTest {
                     Duration.ofMinutes(15),
                     Clock.systemUTC()
             );
+        }
+
+        @Bean
+        AgentRuntimeService agentRuntimeService(ObjectMapper objectMapper) {
+            return new AgentRuntimeService(
+                    new InMemoryAgentRunRepository(), new AgentRuntimeProperties(),
+                    objectMapper, Clock.systemUTC());
         }
     }
 }

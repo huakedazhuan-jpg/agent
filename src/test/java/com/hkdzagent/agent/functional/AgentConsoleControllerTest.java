@@ -3,6 +3,8 @@ package com.hkdzagent.agent.functional;
 import com.hkdzagent.agent.ai.LLMClient;
 import com.hkdzagent.agent.controller.AgentController;
 import com.hkdzagent.agent.memory.OwnedConversationId;
+import com.hkdzagent.agent.ai.AgentExecutionObserver;
+import com.hkdzagent.agent.loop.AgentLoopResult;
 import com.hkdzagent.agent.security.ActorIdentity;
 import com.hkdzagent.agent.trace.AgentTraceRecorder;
 import com.hkdzagent.agent.trace.AgentTraceSanitizer;
@@ -21,11 +23,16 @@ import org.springframework.test.web.servlet.MvcResult;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -54,8 +61,21 @@ class AgentConsoleControllerTest {
                 ActorIdentity.localAnonymous(),
                 "console-session"
         ).encode();
-        when(llmClient.askWithTools("Get AAPL quote", conversationId))
-                .thenReturn("AAPL quote summary");
+        when(llmClient.runWithTools(
+                eq("Get AAPL quote"), eq(conversationId), any(String.class), any(AgentExecutionObserver.class)
+        )).thenAnswer(invocation -> {
+            AgentExecutionObserver observer = invocation.getArgument(3);
+            observer.modelStarted(1);
+            observer.tokenDelta(1, "AAPL ");
+            observer.tokenDelta(1, "quote summary");
+            observer.modelCompleted(1);
+            return new AgentLoopResult(
+                    AgentLoopResult.Status.COMPLETED,
+                    invocation.getArgument(2),
+                    "AAPL quote summary",
+                    List.of()
+            );
+        });
 
         MvcResult pending = mockMvc.perform(post("/api/agent/chat/stream")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -80,7 +100,29 @@ class AgentConsoleControllerTest {
         assertThat(body).contains("\"traceId\"");
         assertThat(body).contains("AAPL quote summary");
 
-        verify(llmClient).askWithTools("Get AAPL quote", conversationId);
+        Matcher runId = Pattern.compile("\\\"runId\\\":\\\"([^\\\"]+)\\\"").matcher(body);
+        assertThat(runId.find()).isTrue();
+        MvcResult replayPending = mockMvc.perform(get("/api/agent/runs/{runId}/events", runId.group(1))
+                        .param("after", "1"))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+        String replay = mockMvc.perform(asyncDispatch(replayPending))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString(StandardCharsets.UTF_8);
+        assertThat(replay).doesNotContain("event: created");
+        assertThat(replay).contains("event: started", "event: token", "event: final");
+
+        mockMvc.perform(get("/api/agent/runs/{runId}", runId.group(1)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.runId").value(runId.group(1)))
+                .andExpect(jsonPath("$.status").value("COMPLETED"))
+                .andExpect(jsonPath("$.finalAnswer").value("AAPL quote summary"))
+                .andExpect(jsonPath("$.checkpointJson").doesNotExist());
+
+        verify(llmClient).runWithTools(
+                eq("Get AAPL quote"), eq(conversationId), any(String.class), any(AgentExecutionObserver.class));
     }
 
     @Test

@@ -1,14 +1,14 @@
 # XingClaw Agent
 
-XingClaw Agent is a Spring Boot based AI agent project. It is currently an engineering prototype being upgraded into a production-grade resume project.
+XingClaw Agent is a Spring Boot AI agent system focused on durable execution, tool calling, human approval, multi-user isolation, and external-channel integration.
 
-The current codebase can compile and pass tests, but it should not yet be described as production-ready. JWT/RBAC and owner-scoped resource isolation now exist; real token-by-token Agent Runtime streaming, approval-gated tool execution, Docker deployment, and observability are still planned work.
+The repository now contains a production-designed Agent Runtime with PostgreSQL persistence, real provider token streaming, resumable tool approval, JWT/RBAC, and owner-scoped resources. It is suitable as a resume project, but should not be described as production-deployed: real PostgreSQL restart drills, runtime checkpoint encryption, load testing, metrics, and deployment automation remain incomplete.
 
 ## Current Status
 
 - Backend tests pass with Maven Wrapper.
 - Local static console is available at `/`.
-- Chat, trace, tool-confirmation, RAG, Feishu webhook, and tool-safety prototypes exist.
+- Durable Agent runs, ordered events, traces, tool approvals, chat memory, RAG, Feishu webhook processing, and tool-safety controls exist.
 - Local secrets are loaded from `.env`, which is intentionally ignored by Git.
 - `.env.example` documents required local configuration keys.
 - The project has been initialized as a Git repository for staged production-hardening work.
@@ -22,7 +22,7 @@ The current codebase can compile and pass tests, but it should not yet be descri
 - Spring Web MVC
 - Reactor `Flux` for SSE responses
 - Static HTML console
-- Feishu OpenAPI integration prototype
+- Feishu OpenAPI webhook and durable inbox integration
 - Spring Security OAuth2 Resource Server with HMAC-signed JWT access tokens
 
 Spring AI is pinned to the stable 1.1.x line because this project currently stays on Spring Boot 3.x. Spring AI 2.x targets Spring Boot 4.x.
@@ -32,7 +32,9 @@ Spring AI is pinned to the stable 1.1.x line because this project currently stay
 - Static browser console at `/`
 - Blocking chat API at `/api/agent/chat`
 - Console SSE endpoint at `/api/agent/chat/stream`
-  - Current limitation: it emits lifecycle events and the final answer, but does not yet implement true token-by-token Agent Runtime streaming.
+  - Reads real provider SSE deltas and persists ordered Runtime events with replayable SSE IDs.
+- Durable Agent Runtime with state machine, optimistic versioning, Worker leases, checkpoints, event replay, and restart recovery
+- Human-in-the-loop approval that pauses sensitive tools before execution and resumes the saved tool call exactly once after approval
 - Agent trace with in-memory local adapter and optional PostgreSQL JDBC repository
 - Tool confirmation queue with in-memory local adapter and optional PostgreSQL JDBC repository, expiry, and atomic decisions
 - Chat memory with JSONL local adapter and optional PostgreSQL JDBC repository
@@ -53,16 +55,17 @@ Spring AI is pinned to the stable 1.1.x line because this project currently stay
 ```text
 src/main/java/com/hkdzagent/agent
   ai/             Spring AI client and chat memory configuration
-  console/        Tool confirmation prototype
+  console/        Durable tool confirmation records and decisions
   controller/     Web/API controllers
   im/             Feishu webhook and reply integration
-  loop/           Agent loop prototype
+  loop/           Bounded Agent planning/tool loop and pause result
   memory/         JSONL-backed chat memory
   model/          Request/response records
   rag/            Local knowledge base and search tool
+  runtime/        Durable run state machine, event log, execution, approval recovery
   security/       JWT authentication, users, bootstrap account, and RBAC policy
   tool/           Tool registration and safety checks
-  trace/          Agent trace prototype
+  trace/          Sanitized execution trace and JDBC repository
 
 src/main/resources
   application.yml
@@ -145,8 +148,14 @@ REDIS_TIMEOUT=2s
 SPRING_FLYWAY_ENABLED=false
 
 AGENT_TRACE_REPOSITORY=memory
+AGENT_RUNTIME_REPOSITORY=memory
+AGENT_RUNTIME_MAX_STEPS=5
+AGENT_RUNTIME_LEASE_DURATION=2m
+AGENT_RUNTIME_EVENT_REPLAY_LIMIT=500
 AGENT_TOOL_APPROVAL_REPOSITORY=memory
 AGENT_TOOL_APPROVAL_TTL=15m
+AGENT_TOOL_APPROVAL_REQUIRED_TOOLS=fileOperationTool,commandExecuteTool
+AGENT_TOOL_APPROVAL_RECOVERY_INTERVAL=15s
 AGENT_MEMORY_REPOSITORY=file
 AGENT_MEMORY_FILE=data/chat-memory.jsonl
 AGENT_RAG_INDEX_FILE=data/rag-index.json
@@ -201,7 +210,13 @@ To store tool approvals in PostgreSQL with multi-instance-safe decisions, set:
 $env:AGENT_TOOL_APPROVAL_REPOSITORY = "jdbc"
 ```
 
-The defaults remain `AGENT_TRACE_REPOSITORY=memory`, `AGENT_MEMORY_REPOSITORY=file`, and `AGENT_TOOL_APPROVAL_REPOSITORY=memory` for fast local tests and development startup. The `prod` profile rejects these defaults and requires all three repositories to use `jdbc`.
+To persist Agent runs, checkpoints, leases, and ordered events, set:
+
+```powershell
+$env:AGENT_RUNTIME_REPOSITORY = "jdbc"
+```
+
+Local defaults remain lightweight for development. The `prod` profile rejects non-JDBC Runtime, trace, memory, approval, Feishu inbox, and user repositories.
 
 To persist and recover Feishu Webhook processing, set `FEISHU_INBOX_REPOSITORY=jdbc`. Production also requires this setting; local development defaults to memory.
 
@@ -311,12 +326,29 @@ Accept: text/event-stream
 
 Current event names:
 
+- `created`
 - `started`
 - `token`
+- `model-started`
+- `model-completed`
+- `tool-call-requested`
+- `tool-started`
+- `tool-completed`
+- `approval-required`
 - `final`
 - `error`
 
-Current limitation: `token` currently contains the full final answer. Real token-by-token streaming is planned in the Agent Runtime phase.
+Each event includes a durable per-run sequence ID. Provider text chunks are emitted as `payload.delta`, not by splitting a completed answer.
+
+### Agent Runtime
+
+```text
+GET /api/agent/runs
+GET /api/agent/runs/{runId}
+GET /api/agent/runs/{runId}/events?after={sequence}
+```
+
+Runtime queries and event replay are owner-scoped. API views intentionally omit provider checkpoints because they may contain complete tool arguments.
 
 ### Agent Trace
 
@@ -335,7 +367,7 @@ POST /api/agent/tool-confirmations/{confirmationId}/approve
 POST /api/agent/tool-confirmations/{confirmationId}/reject
 ```
 
-Approval records can be persisted in PostgreSQL, expire after a configurable TTL, and use atomic pending-state decisions. Current limitation: tool execution is not yet paused and resumed by this approval state, so the end-to-end human-in-the-loop workflow is not complete.
+Approval records can be persisted in PostgreSQL, expire after a configurable TTL, and use atomic pending-state decisions. File and command tools pause before execution by default. Approval resumes the durable checkpoint once; rejection or expiry terminates the Run without executing the tool. A scheduled reconciler recovers decisions after process restarts.
 
 ### Authentication and RBAC
 
@@ -364,9 +396,10 @@ The following gaps are intentional tracking items for the production-grade upgra
 
 - JWT authentication, `USER`/`ADMIN` RBAC, and owner checks exist for chat memory, traces, and approval lists; organization/tenant isolation is not implemented.
 - Access tokens currently have no refresh, revocation, key rotation, or login rate limiting.
-- PostgreSQL/Redis/Flyway infrastructure exists, and Agent trace/chat memory/tool approvals/Feishu inbox have JDBC repository switches.
-- Agent streaming is not yet true token-by-token runtime streaming.
-- Tool approval persistence is durable, but approval is not yet connected to pause/resume tool execution.
+- PostgreSQL/Redis/Flyway infrastructure exists, and Agent Runtime/trace/chat memory/tool approvals/Feishu inbox have JDBC repository switches.
+- Runtime persistence is covered with H2 PostgreSQL-mode tests, but a real PostgreSQL kill/restart recovery drill is still missing.
+- Provider checkpoints contain complete resume context and need production encryption plus retention cleanup.
+- Token events currently write individually; batching is needed before high-throughput deployment.
 - RAG is still local/file-backed, not pgvector hybrid retrieval.
 - No production Docker Compose stack yet.
 - Only a baseline CI quality gate exists; coverage, static analysis, container build, and integration-test gates are still missing.
@@ -381,8 +414,8 @@ The project is being upgraded in staged phases:
 2. Dependency upgrade and configuration fail-fast checks
 3. PostgreSQL, Redis, database migrations, and durable state migration
 4. Authentication, JWT, RBAC, and owner-scoped object authorization baseline
-5. Agent Runtime state machine and real SSE streaming
-6. Tool system, approval workflow, and human-in-the-loop safety
+5. Agent Runtime state machine and real SSE streaming (implemented)
+6. Tool system, approval workflow, and human-in-the-loop safety (implemented baseline)
 7. pgvector RAG with hybrid retrieval, citations, and evaluation
 8. Feishu and market-data provider productionization
 9. Observability, rate limiting, resilience, and SLOs
@@ -391,10 +424,8 @@ The project is being upgraded in staged phases:
 
 ## Resume Positioning
 
-Before the production upgrade is complete, describe this project as:
+Recommended current description:
 
-> A Spring Boot AI agent engineering prototype with tool calling, local RAG, Feishu integration, trace, and safety checks.
+> A production-designed Spring Boot AI Agent system with a PostgreSQL-backed execution state machine, real SSE token streaming, restart-recoverable human approval, optimistic concurrency and Worker leases, JWT/RBAC, owner-scoped resources, durable Feishu event processing, and automated tests.
 
-After the planned production-hardening phases are complete, it can be described more strongly as:
-
-> A production-designed public-information research Agent system with multi-user access control, streaming Agent Runtime, human-in-the-loop tool approval, pgvector RAG, Feishu integration, observability, Docker deployment, and evaluation tests.
+Do not yet claim production deployment, pgvector retrieval, complete observability, or proven high-concurrency capacity.

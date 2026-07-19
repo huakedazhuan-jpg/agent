@@ -1,6 +1,6 @@
 # Quality Gates
 
-This project is still being upgraded from an engineering prototype into a production-grade resume project. The current quality gate is intentionally small and enforceable.
+This project is a production-designed resume project that is still being hardened for deployment. The current quality gate is intentionally small and enforceable.
 
 ## Required checks
 

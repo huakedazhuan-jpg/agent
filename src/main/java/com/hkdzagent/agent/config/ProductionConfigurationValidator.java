@@ -58,6 +58,10 @@ public class ProductionConfigurationValidator implements InitializingBean {
             unsafeProperties.add("agent.trace.repository must be jdbc in prod");
         }
 
+        if (!jdbcRuntimeRepositoryEnabled()) {
+            unsafeProperties.add("agent.runtime.repository must be jdbc in prod");
+        }
+
         if (!jdbcChatMemoryEnabled()) {
             unsafeProperties.add("agent.memory.repository must be jdbc in prod");
         }
@@ -126,6 +130,11 @@ public class ProductionConfigurationValidator implements InitializingBean {
 
     private boolean jdbcTraceRepositoryEnabled() {
         String repository = environment.getProperty("agent.trace.repository", "");
+        return "jdbc".equalsIgnoreCase(repository.trim());
+    }
+
+    private boolean jdbcRuntimeRepositoryEnabled() {
+        String repository = environment.getProperty("agent.runtime.repository", "");
         return "jdbc".equalsIgnoreCase(repository.trim());
     }
 

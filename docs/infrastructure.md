@@ -1,6 +1,6 @@
 # Infrastructure
 
-This phase introduces baseline durable infrastructure. Agent trace, chat memory, tool approvals, and the Feishu event inbox can now use PostgreSQL through JDBC repositories.
+The durable infrastructure supports Agent Runtime state, trace, chat memory, tool approvals, users, and the Feishu event inbox through PostgreSQL JDBC repositories.
 
 ## Services
 
@@ -57,6 +57,7 @@ The migrations create durable-state tables for:
 - Feishu event inbox
 - application users, roles, and user-role assignments
 - owner keys and owner-scoped indexes for conversations, traces, and tool approvals
+- Agent runs, provider checkpoints, Worker leases, and ordered Runtime events
 
 Agent trace can now use PostgreSQL:
 
@@ -77,7 +78,17 @@ AGENT_TOOL_APPROVAL_REPOSITORY=jdbc
 AGENT_TOOL_APPROVAL_TTL=15m
 ```
 
-Approval decisions use a conditional database update from `PENDING` to `APPROVED` or `REJECTED`. This prevents two application instances from deciding the same approval twice. Expired pending records transition to `EXPIRED`, and only sanitized argument previews are persisted.
+Agent Runtime can persist resumable execution state and events:
+
+```properties
+AGENT_RUNTIME_REPOSITORY=jdbc
+AGENT_RUNTIME_LEASE_DURATION=2m
+AGENT_RUNTIME_EVENT_REPLAY_LIMIT=500
+```
+
+Approval decisions use a conditional database update from `PENDING` to `APPROVED` or `REJECTED`. This prevents two application instances from deciding the same approval twice. Expired pending records transition to `EXPIRED`. Approval rows expose only sanitized argument previews; the linked Runtime checkpoint contains full provider context needed for recovery and therefore requires production encryption and retention controls.
+
+Runtime uses optimistic versions to reject stale checkpoint updates and Worker leases to prevent simultaneous execution. Per-run event sequences provide stable SSE IDs. A recovery scheduler reconciles durable approval decisions after application restarts.
 
 Feishu Webhook events can use a durable inbox:
 
@@ -96,8 +107,8 @@ Migration V7 scopes runtime data by Actor. Web users use `user:<JWT subject>`, F
 
 The processing guarantee is at-least-once, not strict exactly-once. If an external Feishu reply succeeds and the process stops before the inbox row is marked `PROCESSED`, lease recovery can repeat the reply. Removing that final ambiguity requires an idempotency guarantee from the external send operation or a separate transactional outbox/send-receipt design.
 
-The defaults remain `AGENT_TRACE_REPOSITORY=memory`, `AGENT_MEMORY_REPOSITORY=file`, `AGENT_TOOL_APPROVAL_REPOSITORY=memory`, and `FEISHU_INBOX_REPOSITORY=memory` so local tests and development startup do not require a running database.
+The defaults remain `AGENT_RUNTIME_REPOSITORY=memory`, `AGENT_TRACE_REPOSITORY=memory`, `AGENT_MEMORY_REPOSITORY=file`, `AGENT_TOOL_APPROVAL_REPOSITORY=memory`, and `FEISHU_INBOX_REPOSITORY=memory` so local tests and development startup do not require a running database.
 
 ## Current safety boundary
 
-The local default passwords in `.env.example` and `docker-compose.yml` are only for development. Production must provide explicit database and Redis credentials through environment variables or a secret manager. Production also must enable Flyway; use JDBC for traces, memory, approvals, the Feishu inbox, and users; enable authentication; and supply a JWT secret of at least 32 bytes.
+The local default passwords in `.env.example` and `docker-compose.yml` are only for development. Production must provide explicit database and Redis credentials through environment variables or a secret manager. Production also must enable Flyway; use JDBC for Runtime, traces, memory, approvals, the Feishu inbox, and users; enable authentication; and supply a JWT secret of at least 32 bytes.

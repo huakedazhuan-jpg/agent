@@ -11,6 +11,8 @@ public interface ToolConfirmationRepository {
 
     ToolConfirmation findById(String confirmationId);
 
+    List<ToolConfirmation> findByStatus(ToolConfirmation.Status status, int limit);
+
     ToolConfirmation decidePending(
             String confirmationId,
             ToolConfirmation.Status status,

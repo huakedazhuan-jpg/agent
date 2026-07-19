@@ -32,6 +32,10 @@ class ProjectCleanupTest {
         assertThat(html).contains("/api/agent/chat/stream");
         assertThat(html).contains("/api/agent/traces");
         assertThat(html).contains("/api/agent/tool-confirmations");
+        assertThat(html).contains("const payload = data.payload || data");
+        assertThat(html).contains("state.assistantText += payload.delta");
+        assertThat(html).contains("async function followRun(runId)");
+        assertThat(html).contains("/events?after=");
         assertThat(html).contains("id=\"messageInput\"");
         assertThat(html).contains("id=\"sendButton\"");
         assertThat(html).contains("id=\"toolTimeline\"");

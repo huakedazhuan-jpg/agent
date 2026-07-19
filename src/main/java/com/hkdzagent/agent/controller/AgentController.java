@@ -2,14 +2,25 @@ package com.hkdzagent.agent.controller;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.hkdzagent.agent.ai.LLMClient;
 import com.hkdzagent.agent.console.ToolConfirmation;
 import com.hkdzagent.agent.console.ToolConfirmationService;
+import com.hkdzagent.agent.console.ToolConfirmationProperties;
 import com.hkdzagent.agent.model.ChatRequest;
 import com.hkdzagent.agent.model.ChatResponse;
 import com.hkdzagent.agent.memory.OwnedConversationId;
 import com.hkdzagent.agent.security.ActorIdentity;
 import com.hkdzagent.agent.security.RequestActorResolver;
+import com.hkdzagent.agent.runtime.AgentRun;
+import com.hkdzagent.agent.runtime.AgentRunEvent;
+import com.hkdzagent.agent.runtime.AgentRunEventType;
+import com.hkdzagent.agent.runtime.AgentRuntimeExecutor;
+import com.hkdzagent.agent.runtime.AgentRuntimeProperties;
+import com.hkdzagent.agent.runtime.AgentRuntimeService;
+import com.hkdzagent.agent.runtime.AgentApprovalOrchestrator;
+import com.hkdzagent.agent.runtime.AgentApprovalPauseService;
+import com.hkdzagent.agent.runtime.InMemoryAgentRunRepository;
 import com.hkdzagent.agent.trace.AgentTrace;
 import com.hkdzagent.agent.trace.AgentTraceEvent;
 import com.hkdzagent.agent.trace.AgentTraceRecorder;
@@ -29,7 +40,7 @@ import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 
-import java.time.Duration;
+import java.time.Clock;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -45,9 +56,22 @@ public class AgentController {
     private AgentTraceRepository traceRepository = new InMemoryAgentTraceRepository();
     private AgentTraceRecorder traceRecorder = new AgentTraceRecorder(traceRepository, fallbackSanitizer);
     private ToolConfirmationService confirmationService = new ToolConfirmationService(fallbackSanitizer);
+    private AgentRuntimeService runtimeService;
+    private AgentRuntimeExecutor runtimeExecutor;
+    private AgentApprovalOrchestrator approvalOrchestrator;
 
     public AgentController(LLMClient llmClient) {
         this.llmClient = llmClient;
+        this.runtimeService = new AgentRuntimeService(
+                new InMemoryAgentRunRepository(),
+                new AgentRuntimeProperties(),
+                objectMapper,
+                Clock.systemUTC()
+        );
+        this.runtimeExecutor = new AgentRuntimeExecutor(
+                runtimeService, llmClient, traceRecorder, fallbackSanitizer,
+                new AgentApprovalPauseService(confirmationService, runtimeService, fallbackSanitizer),
+                new ToolConfirmationProperties());
     }
 
     @PostMapping("/api/agent/chat")
@@ -66,9 +90,59 @@ public class AgentController {
         String conversationId = ownedConversationId(owner, sessionId);
         String message = request.message() == null ? "" : request.message();
         traceRecorder.startTrace(owner, traceId, sessionId, message);
+        AgentRun run = runtimeService.create(owner, sessionId, conversationId, traceId, message);
+        AgentRunEvent created = runtimeService.replayEvents(run.runId(), 0).get(0);
 
-        return Flux.defer(() -> runAgentStream(traceId, sessionId, conversationId, message))
-                .subscribeOn(Schedulers.boundedElastic());
+        return Flux.<String>create(sink -> {
+            sink.next(sse(created));
+            String workerId = "stream-" + UUID.randomUUID();
+            Schedulers.boundedElastic().schedule(() -> {
+                try {
+                    runtimeExecutor.execute(run.runId(), workerId, event -> sink.next(sse(event)));
+                    sink.complete();
+                } catch (Exception exception) {
+                    sink.error(exception);
+                }
+            });
+        });
+    }
+
+    @GetMapping(value = "/api/agent/runs/{runId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public ResponseEntity<Flux<String>> replayRunEvents(
+            @PathVariable String runId,
+            @RequestParam(defaultValue = "0") long after,
+            Authentication authentication
+    ) {
+        ActorIdentity owner = actorResolver.resolve(authentication);
+        if (runtimeService.findOwned(runId, owner) == null) {
+            return ResponseEntity.notFound().build();
+        }
+        Flux<String> events = Flux.fromIterable(runtimeService.replayEvents(runId, Math.max(0, after)))
+                .map(this::sse);
+        return ResponseEntity.ok(events);
+    }
+
+    @GetMapping("/api/agent/runs/{runId}")
+    public ResponseEntity<AgentRunView> run(
+            @PathVariable String runId,
+            Authentication authentication
+    ) {
+        ActorIdentity owner = actorResolver.resolve(authentication);
+        AgentRun run = runtimeService.findOwned(runId, owner);
+        return run == null
+                ? ResponseEntity.notFound().build()
+                : ResponseEntity.ok(AgentRunView.from(run));
+    }
+
+    @GetMapping("/api/agent/runs")
+    public List<AgentRunView> recentRuns(
+            @RequestParam(defaultValue = "20") int limit,
+            Authentication authentication
+    ) {
+        ActorIdentity owner = actorResolver.resolve(authentication);
+        return runtimeService.findRecent(owner, Math.max(1, Math.min(limit, 50))).stream()
+                .map(AgentRunView::from)
+                .toList();
     }
 
     @GetMapping("/api/agent/traces/{traceId}")
@@ -104,7 +178,9 @@ public class AgentController {
 
     @PostMapping("/api/agent/tool-confirmations/{confirmationId}/approve")
     public ToolConfirmation approveConfirmation(@PathVariable String confirmationId) {
-        return confirmationService.approve(confirmationId);
+        return approvalOrchestrator == null
+                ? confirmationService.approve(confirmationId)
+                : approvalOrchestrator.approve(confirmationId);
     }
 
     @PostMapping("/api/agent/tool-confirmations/{confirmationId}/reject")
@@ -113,7 +189,9 @@ public class AgentController {
             @RequestBody(required = false) Map<String, String> body
     ) {
         String reason = body == null ? null : body.get("reason");
-        return confirmationService.reject(confirmationId, reason);
+        return approvalOrchestrator == null
+                ? confirmationService.reject(confirmationId, reason)
+                : approvalOrchestrator.reject(confirmationId, reason);
     }
 
     @Autowired(required = false)
@@ -141,52 +219,49 @@ public class AgentController {
         this.actorResolver = actorResolver;
     }
 
-    private Flux<String> runAgentStream(
-            String traceId,
-            String sessionId,
-            String conversationId,
-            String message
-    ) {
-        LinkedHashMap<String, Object> started = payload(traceId, sessionId);
-        started.put("status", "RUNNING");
+    @Autowired(required = false)
+    void setRuntimeService(AgentRuntimeService runtimeService) {
+        this.runtimeService = runtimeService;
+    }
 
+    @Autowired(required = false)
+    void setRuntimeExecutor(AgentRuntimeExecutor runtimeExecutor) {
+        this.runtimeExecutor = runtimeExecutor;
+    }
+
+    @Autowired(required = false)
+    void setApprovalOrchestrator(AgentApprovalOrchestrator approvalOrchestrator) {
+        this.approvalOrchestrator = approvalOrchestrator;
+    }
+
+    private String sse(AgentRunEvent event) {
+        LinkedHashMap<String, Object> envelope = new LinkedHashMap<>();
+        envelope.put("runId", event.runId());
+        envelope.put("sequence", event.sequence());
+        envelope.put("type", event.type().name());
+        envelope.put("payload", readPayload(event.payloadJson()));
+        return "id: " + event.sequence() + "\n"
+                + "event: " + eventName(event.type()) + "\n"
+                + "data: " + writeJson(envelope) + "\n\n";
+    }
+
+    private JsonNode readPayload(String payloadJson) {
         try {
-            long startedNanos = System.nanoTime();
-            String answer = llmClient.askWithTools(message, conversationId);
-            Duration duration = Duration.ofNanos(System.nanoTime() - startedNanos);
-            traceRecorder.recordFinalAnswer(traceId, answer);
-            traceRecorder.finishTrace(traceId, "COMPLETED");
-
-            LinkedHashMap<String, Object> token = payload(traceId, sessionId);
-            token.put("content", answer);
-
-            LinkedHashMap<String, Object> finished = payload(traceId, sessionId);
-            finished.put("answer", answer);
-            finished.put("status", "COMPLETED");
-            finished.put("durationMs", duration.toMillis());
-
-            return Flux.just(
-                    sse("started", started),
-                    sse("token", token),
-                    sse("final", finished)
-            );
-        } catch (Exception e) {
-            traceRecorder.recordError(traceId, 0, e.getMessage(), Duration.ZERO);
-            traceRecorder.finishTrace(traceId, "FAILED");
-
-            LinkedHashMap<String, Object> failed = payload(traceId, sessionId);
-            failed.put("status", "FAILED");
-            failed.put("error", e.getMessage());
-            return Flux.just(
-                    sse("started", started),
-                    sse("error", failed)
-            );
+            return objectMapper.readTree(payloadJson);
+        } catch (JsonProcessingException exception) {
+            return objectMapper.createObjectNode().put("raw", payloadJson);
         }
     }
 
-    private String sse(String event, Map<String, Object> data) {
-        return "event: " + event + "\n" +
-                "data: " + writeJson(data) + "\n\n";
+    private String eventName(AgentRunEventType type) {
+        return switch (type) {
+            case RUN_CREATED -> "created";
+            case RUN_STARTED -> "started";
+            case TOKEN_DELTA -> "token";
+            case RUN_COMPLETED -> "final";
+            case RUN_FAILED -> "error";
+            default -> type.name().toLowerCase().replace('_', '-');
+        };
     }
 
     private String writeJson(Map<String, Object> data) {
@@ -195,13 +270,6 @@ public class AgentController {
         } catch (JsonProcessingException e) {
             return "{\"error\":\"failed to serialize console event\"}";
         }
-    }
-
-    private LinkedHashMap<String, Object> payload(String traceId, String sessionId) {
-        LinkedHashMap<String, Object> payload = new LinkedHashMap<>();
-        payload.put("traceId", traceId);
-        payload.put("sessionId", sessionId);
-        return payload;
     }
 
     private String normalizeSessionId(String sessionId) {
@@ -232,6 +300,33 @@ public class AgentController {
                     trace.status().name(),
                     trace.durationMs(),
                     trace.events()
+            );
+        }
+    }
+
+    private record AgentRunView(
+            String runId,
+            String sessionId,
+            String traceId,
+            String status,
+            int currentStep,
+            int maxSteps,
+            long version,
+            long lastEventSequence,
+            String pendingApprovalId,
+            String finalAnswer,
+            String errorMessage,
+            java.time.Instant createdAt,
+            java.time.Instant updatedAt,
+            java.time.Instant completedAt
+    ) {
+
+        private static AgentRunView from(AgentRun run) {
+            return new AgentRunView(
+                    run.runId(), run.sessionId(), run.traceId(), run.status().name(),
+                    run.currentStep(), run.maxSteps(), run.version(), run.lastEventSequence(),
+                    run.pendingApprovalId(), run.finalAnswer(), run.errorMessage(),
+                    run.createdAt(), run.updatedAt(), run.completedAt()
             );
         }
     }

@@ -194,6 +194,31 @@ class InfrastructureConfigurationTest {
     }
 
     @Test
+    void eighthFlywayMigrationAddsDurableAgentRuntimeAndOrderedEvents() throws IOException {
+        Path migration = PROJECT_ROOT.resolve(
+                "src/main/resources/db/migration/postgresql/V8__durable_agent_runtime.sql"
+        );
+        String sql = Files.readString(migration);
+
+        assertThat(sql).contains(
+                "CREATE TABLE agent_runs",
+                "owner_key VARCHAR(320) NOT NULL",
+                "status VARCHAR(32) NOT NULL",
+                "version BIGINT NOT NULL DEFAULT 0",
+                "last_event_sequence BIGINT NOT NULL DEFAULT 0",
+                "checkpoint JSONB NOT NULL",
+                "pending_approval_id UUID",
+                "lease_owner VARCHAR(128)",
+                "ck_agent_runs_pending_approval",
+                "ck_agent_runs_completion_time",
+                "CREATE TABLE agent_run_events",
+                "UNIQUE (run_id, sequence)",
+                "ALTER TABLE tool_approvals",
+                "ADD COLUMN run_id UUID REFERENCES agent_runs (id) ON DELETE SET NULL"
+        );
+    }
+
+    @Test
     void environmentTemplateDocumentsInfrastructureSettings() throws IOException {
         String envExample = Files.readString(PROJECT_ROOT.resolve(".env.example"));
 

@@ -11,6 +11,7 @@ public record AgentLoopResult(
 
     public enum Status {
         COMPLETED,
+        WAITING_APPROVAL,
         STEP_LIMIT_REACHED,
         FAILED
     }

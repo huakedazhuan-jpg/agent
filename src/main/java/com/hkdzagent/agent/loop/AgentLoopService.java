@@ -24,13 +24,17 @@ public class AgentLoopService {
     }
 
     public AgentLoopResult run(AgentLoopRequest request) {
+        return runFrom(request, 1);
+    }
+
+    public AgentLoopResult runFrom(AgentLoopRequest request, int startingStep) {
         String traceId = traceId(request);
         List<AgentStep> steps = new ArrayList<>();
         List<AgentObservation> observations = new ArrayList<>();
 
         try {
             AgentPlan plan = planner.plan(request);
-            for (int step = 1; step <= maxSteps; step++) {
+            for (int step = Math.max(1, startingStep); step <= maxSteps; step++) {
                 AgentDecision decision = model.next(new AgentTurn(traceId, request, plan, List.copyOf(observations), step));
                 if (decision.type() == AgentDecision.Type.FINAL_ANSWER) {
                     steps.add(AgentStep.finalStep(plan, decision.finalAnswer()));
@@ -52,6 +56,13 @@ public class AgentLoopService {
                     AgentLoopResult.Status.STEP_LIMIT_REACHED,
                     traceId,
                     "agent tool step limit reached for traceId " + traceId,
+                    List.copyOf(steps)
+            );
+        } catch (AgentLoopPausedException paused) {
+            return new AgentLoopResult(
+                    AgentLoopResult.Status.WAITING_APPROVAL,
+                    traceId,
+                    paused.getMessage(),
                     List.copyOf(steps)
             );
         } catch (Exception e) {

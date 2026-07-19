@@ -65,12 +65,35 @@ public class ToolConfirmationService {
             String toolName,
             String arguments
     ) {
+        return requestConfirmation(owner, sessionId, traceId, null, toolName, arguments);
+    }
+
+    public ToolConfirmation requestConfirmationForRun(
+            ActorIdentity owner,
+            String sessionId,
+            String traceId,
+            String runId,
+            String toolName,
+            String arguments
+    ) {
+        return requestConfirmation(owner, sessionId, traceId, runId, toolName, arguments);
+    }
+
+    private ToolConfirmation requestConfirmation(
+            ActorIdentity owner,
+            String sessionId,
+            String traceId,
+            String runId,
+            String toolName,
+            String arguments
+    ) {
         Instant createdAt = clock.instant();
         return repository.save(new ToolConfirmation(
                 UUID.randomUUID().toString(),
                 owner.key(),
                 normalize(sessionId),
                 traceId,
+                runId,
                 toolName,
                 sanitizer.preview(arguments),
                 ToolConfirmation.Status.PENDING,
@@ -89,6 +112,10 @@ public class ToolConfirmationService {
     public ToolConfirmation findById(String confirmationId) {
         repository.expirePendingBefore(clock.instant());
         return repository.findById(confirmationId);
+    }
+
+    public int expirePending() {
+        return repository.expirePendingBefore(clock.instant());
     }
 
     public ToolConfirmation approve(String confirmationId) {

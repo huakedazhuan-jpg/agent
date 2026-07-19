@@ -477,6 +477,10 @@
     const state = {
         sessionId: localStorage.getItem('agent.console.sessionId') || createSessionId(),
         activeTraceId: null,
+        activeRunId: null,
+        lastEventSequence: 0,
+        assistantText: '',
+        runTerminal: false,
         abortController: null,
         activeAssistantMessage: null,
         selectedConfirmation: null
@@ -546,6 +550,10 @@
 
         appendMessage(text, 'user');
         elements.messageInput.value = '';
+        state.assistantText = '';
+        state.activeRunId = null;
+        state.lastEventSequence = 0;
+        state.runTerminal = false;
         state.activeAssistantMessage = appendMessage('Agent 正在思考...', 'assistant loading');
         state.abortController = new AbortController();
         elements.sendButton.disabled = true;
@@ -612,30 +620,46 @@
         const event = (lines.find(line => line.startsWith('event:')) || '').replace('event:', '').trim();
         const dataLine = (lines.find(line => line.startsWith('data:')) || '').replace('data:', '').trim();
         const data = parseJson(dataLine);
+        const payload = data.payload || data;
 
-        if (data.traceId) {
-            state.activeTraceId = data.traceId;
-            elements.currentTrace.textContent = data.traceId;
+        if (data.runId) {
+            state.activeRunId = data.runId;
+        }
+        if (data.sequence) {
+            state.lastEventSequence = data.sequence;
+        }
+        if (payload.traceId) {
+            state.activeTraceId = payload.traceId;
+            elements.currentTrace.textContent = payload.traceId;
         }
 
         if (event === 'started') {
             setStatus('Agent 正在思考', '流式连接已建立');
         } else if (event === 'token') {
-            markAssistant(data.content || '', false);
+            state.assistantText += payload.delta || payload.content || '';
+            markAssistant(state.assistantText, false);
             setStatus('正在接收响应', '流式响应中');
-        } else if (event === 'tool_call' || event === 'observation') {
-            appendToolEvent(event, data);
+        } else if (event === 'tool-call-requested' || event === 'tool-completed'
+                || event === 'approval-required') {
+            appendToolEvent(event, payload);
+            if (event === 'approval-required') {
+                setStatus('等待敏感工具审批', '已暂停');
+                loadConfirmations();
+            }
         } else if (event === 'final') {
-            markAssistant(data.answer || data.content || '', false);
+            state.runTerminal = true;
+            state.assistantText = payload.answer || payload.content || state.assistantText;
+            markAssistant(state.assistantText, false);
             setStatus('响应完成', '空闲');
-            if (data.traceId) {
-                loadTrace(data.traceId);
+            if (state.activeTraceId) {
+                loadTrace(state.activeTraceId);
             }
         } else if (event === 'error') {
-            markAssistant(data.error || '请求失败', true);
+            state.runTerminal = true;
+            markAssistant(payload.error || '请求失败', true);
             setStatus('响应失败', '错误');
-            if (data.traceId) {
-                loadTrace(data.traceId);
+            if (state.activeTraceId) {
+                loadTrace(state.activeTraceId);
             }
         }
     }
@@ -687,10 +711,39 @@
                     body: JSON.stringify({reason: 'user cancelled'})
                 }
                 : {method: 'POST'};
-        await fetch(url, options);
+        const response = await fetch(url, options);
+        if (!response.ok) {
+            throw new Error('审批操作失败: ' + response.status);
+        }
+        const decided = await response.json();
         state.selectedConfirmation = null;
         elements.confirmDialog.classList.add('hidden');
         loadConfirmations();
+        if (decided.runId) {
+            await followRun(decided.runId);
+        }
+    }
+
+    async function followRun(runId) {
+        if (state.activeRunId !== runId) {
+            state.lastEventSequence = 0;
+            state.assistantText = '';
+        }
+        state.activeRunId = runId;
+        state.runTerminal = false;
+        setStatus('审批已处理，等待 Agent 恢复', '恢复中');
+        for (let attempt = 0; attempt < 240 && !state.runTerminal; attempt++) {
+            const response = await fetch(
+                '/api/agent/runs/' + encodeURIComponent(runId)
+                + '/events?after=' + encodeURIComponent(state.lastEventSequence)
+            );
+            if (response.ok && response.body) {
+                await readSseStream(response.body);
+            }
+            if (!state.runTerminal) {
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+        }
     }
 
     function renderTrace(trace) {

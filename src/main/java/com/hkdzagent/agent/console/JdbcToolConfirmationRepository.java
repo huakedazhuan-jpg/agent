@@ -36,6 +36,7 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
                     owner_key,
                     session_id,
                     trace_id,
+                    run_id,
                     tool_name,
                     request_hash,
                     request_payload,
@@ -50,6 +51,7 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
                     :ownerKey,
                     :sessionId,
                     :traceId,
+                    :runId,
                     :toolName,
                     :requestHash,
                     CAST(:requestPayload AS JSON),
@@ -74,6 +76,7 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
                        owner_key,
                        session_id,
                        trace_id,
+                       CAST(run_id AS VARCHAR) AS run_id,
                        tool_name,
                        arguments_preview,
                        status,
@@ -100,6 +103,7 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
                        owner_key,
                        session_id,
                        trace_id,
+                       CAST(run_id AS VARCHAR) AS run_id,
                        tool_name,
                        arguments_preview,
                        status,
@@ -113,6 +117,33 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
                 new MapSqlParameterSource("id", UUID.fromString(confirmationId)),
                 this::mapConfirmation);
         return matches.isEmpty() ? null : matches.get(0);
+    }
+
+    @Override
+    public List<ToolConfirmation> findByStatus(ToolConfirmation.Status status, int limit) {
+        return jdbcTemplate.query("""
+                SELECT id,
+                       owner_key,
+                       session_id,
+                       trace_id,
+                       CAST(run_id AS VARCHAR) AS run_id,
+                       tool_name,
+                       arguments_preview,
+                       status,
+                       decision_reason,
+                       created_at,
+                       expires_at,
+                       decided_at
+                FROM tool_approvals
+                WHERE status = :status
+                  AND run_id IS NOT NULL
+                ORDER BY decided_at ASC, id ASC
+                LIMIT :limit
+                """,
+                new MapSqlParameterSource()
+                        .addValue("status", status.name())
+                        .addValue("limit", Math.max(1, limit)),
+                this::mapConfirmation);
     }
 
     @Override
@@ -161,6 +192,7 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
                 .addValue("ownerKey", confirmation.ownerKey())
                 .addValue("sessionId", confirmation.sessionId())
                 .addValue("traceId", confirmation.traceId())
+                .addValue("runId", nullableUuid(confirmation.runId()))
                 .addValue("toolName", confirmation.toolName())
                 .addValue("argumentsPreview", confirmation.argumentsPreview())
                 .addValue("status", confirmation.status().name())
@@ -176,6 +208,7 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
                 rs.getString("owner_key"),
                 rs.getString("session_id"),
                 rs.getString("trace_id"),
+                rs.getString("run_id"),
                 rs.getString("tool_name"),
                 rs.getString("arguments_preview"),
                 ToolConfirmation.Status.valueOf(rs.getString("status")),
@@ -206,6 +239,10 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
 
     private Timestamp timestamp(Instant instant) {
         return instant == null ? null : Timestamp.from(instant);
+    }
+
+    private UUID nullableUuid(String value) {
+        return value == null ? null : UUID.fromString(value);
     }
 
     private Instant instant(Timestamp timestamp) {

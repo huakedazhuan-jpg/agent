@@ -9,7 +9,22 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ProductionConfigurationValidatorTest {
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
+            .withPropertyValues("agent.runtime.repository=jdbc")
             .withBean(ProductionConfigurationValidator.class);
+
+    @Test
+    void failsFastWhenProductionUsesInMemoryAgentRuntime() {
+        contextRunner
+                .withPropertyValues(
+                        "spring.profiles.active=prod",
+                        "agent.runtime.repository=memory"
+                )
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure().getMessage())
+                            .contains("agent.runtime.repository must be jdbc in prod");
+                });
+    }
 
     @Test
     void allowsDevelopmentProfileWithoutProductionOnlySecrets() {

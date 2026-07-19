@@ -35,6 +35,15 @@ public class InMemoryToolConfirmationRepository implements ToolConfirmationRepos
     }
 
     @Override
+    public synchronized List<ToolConfirmation> findByStatus(ToolConfirmation.Status status, int limit) {
+        return confirmations.values().stream()
+                .filter(confirmation -> confirmation.status() == status)
+                .filter(confirmation -> confirmation.runId() != null)
+                .limit(Math.max(1, limit))
+                .toList();
+    }
+
+    @Override
     public synchronized ToolConfirmation decidePending(
             String confirmationId,
             ToolConfirmation.Status status,
@@ -50,6 +59,7 @@ public class InMemoryToolConfirmationRepository implements ToolConfirmationRepos
                 current.ownerKey(),
                 current.sessionId(),
                 current.traceId(),
+                current.runId(),
                 current.toolName(),
                 current.argumentsPreview(),
                 status,

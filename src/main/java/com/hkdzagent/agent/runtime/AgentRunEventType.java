@@ -1,0 +1,16 @@
+package com.hkdzagent.agent.runtime;
+
+public enum AgentRunEventType {
+    RUN_CREATED,
+    RUN_STARTED,
+    MODEL_STARTED,
+    TOKEN_DELTA,
+    MODEL_COMPLETED,
+    TOOL_CALL_REQUESTED,
+    APPROVAL_REQUIRED,
+    TOOL_STARTED,
+    TOOL_COMPLETED,
+    RUN_COMPLETED,
+    RUN_FAILED,
+    RUN_CANCELLED
+}

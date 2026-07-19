@@ -55,6 +55,11 @@ feishu:
 tavily:
   api-key: ${TAVILY_API_KEY}
 agent:
+  runtime:
+    repository: ${AGENT_RUNTIME_REPOSITORY:memory}
+    max-steps: ${AGENT_RUNTIME_MAX_STEPS:5}
+    lease-duration: ${AGENT_RUNTIME_LEASE_DURATION:2m}
+    event-replay-limit: ${AGENT_RUNTIME_EVENT_REPLAY_LIMIT:500}
   security:
     enabled: ${AGENT_SECURITY_ENABLED:false}
     user-repository: ${AGENT_SECURITY_USER_REPOSITORY:memory}
@@ -71,6 +76,8 @@ agent:
   tool-approval:
     repository: ${AGENT_TOOL_APPROVAL_REPOSITORY:memory}
     ttl: ${AGENT_TOOL_APPROVAL_TTL:15m}
+    required-tools: ${AGENT_TOOL_APPROVAL_REQUIRED_TOOLS:fileOperationTool,commandExecuteTool}
+    recovery-interval: ${AGENT_TOOL_APPROVAL_RECOVERY_INTERVAL:15s}
   kimi:
     request-timeout: ${AGENT_KIMI_REQUEST_TIMEOUT:60s}
     max-tool-rounds: ${AGENT_KIMI_MAX_TOOL_ROUNDS:5}

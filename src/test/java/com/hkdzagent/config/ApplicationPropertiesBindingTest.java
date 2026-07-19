@@ -3,6 +3,7 @@ package com.hkdzagent.config;
 import com.hkdzagent.agent.AgentApplication;
 import com.hkdzagent.agent.ai.ChatMemoryProperties;
 import com.hkdzagent.agent.ai.KimiProperties;
+import com.hkdzagent.agent.runtime.AgentRuntimeProperties;
 import com.hkdzagent.agent.ai.OpenAiCompatibleProperties;
 import com.hkdzagent.agent.console.ToolConfirmationProperties;
 import com.hkdzagent.agent.im.FeishuProperties;
@@ -65,6 +66,11 @@ class ApplicationPropertiesBindingTest {
                 .withProperty("agent.trace.repository", "jdbc")
                 .withProperty("agent.tool-approval.repository", "jdbc")
                 .withProperty("agent.tool-approval.ttl", "10m")
+                .withProperty("agent.tool-approval.required-tools", "fileOperationTool,commandExecuteTool")
+                .withProperty("agent.runtime.repository", "jdbc")
+                .withProperty("agent.runtime.max-steps", "9")
+                .withProperty("agent.runtime.lease-duration", "3m")
+                .withProperty("agent.runtime.event-replay-limit", "800")
                 .withProperty("agent.security.enabled", "true")
                 .withProperty("agent.security.user-repository", "jdbc")
                 .withProperty("agent.security.jwt.issuer", "test-agent")
@@ -96,6 +102,8 @@ class ApplicationPropertiesBindingTest {
                 "agent.tool-approval",
                 ToolConfirmationProperties.class
         );
+        AgentRuntimeProperties runtime = bind(
+                environment, "agent.runtime", AgentRuntimeProperties.class);
         AgentSecurityProperties security = bind(environment, "agent.security", AgentSecurityProperties.class);
         TavilyProperties tavily = bind(environment, "tavily", TavilyProperties.class);
         FeishuProperties feishu = bind(environment, "feishu", FeishuProperties.class);
@@ -106,6 +114,12 @@ class ApplicationPropertiesBindingTest {
         assertThat(trace.repository()).isEqualTo("jdbc");
         assertThat(toolApproval.repository()).isEqualTo("jdbc");
         assertThat(toolApproval.ttl()).isEqualTo(Duration.ofMinutes(10));
+        assertThat(toolApproval.requiredTools())
+                .containsExactly("fileOperationTool", "commandExecuteTool");
+        assertThat(runtime.getRepository()).isEqualTo("jdbc");
+        assertThat(runtime.getMaxSteps()).isEqualTo(9);
+        assertThat(runtime.getLeaseDuration()).isEqualTo(Duration.ofMinutes(3));
+        assertThat(runtime.getEventReplayLimit()).isEqualTo(800);
         assertThat(security.enabled()).isTrue();
         assertThat(security.userRepository()).isEqualTo("jdbc");
         assertThat(security.jwt().issuer()).isEqualTo("test-agent");

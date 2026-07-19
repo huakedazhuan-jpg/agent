@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.hkdzagent.agent.loop.AgentDecision;
 import com.hkdzagent.agent.loop.AgentLoopRequest;
 import com.hkdzagent.agent.loop.AgentLoopResult;
+import com.hkdzagent.agent.loop.AgentLoopPausedException;
 import com.hkdzagent.agent.loop.AgentLoopService;
 import com.hkdzagent.agent.loop.AgentObservation;
 import com.hkdzagent.agent.loop.AgentPlan;
@@ -22,15 +23,21 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -149,14 +156,71 @@ public class KimiToolCallingClient {
     }
 
     public String askWithTools(String userMessage, String sessionId) {
-        String conversationId = normalizeSessionId(sessionId);
-        List<ObjectNode> messages = requestMessages(conversationId, userMessage);
-        AgentLoopService agentLoopService = agentLoopService(messages, userMessage, conversationId);
-        AgentLoopResult result = agentLoopService.run(new AgentLoopRequest(userMessage, conversationId, conversationId));
-        return result.finalAnswer();
+        return askWithTools(userMessage, sessionId, sessionId, AgentExecutionObserver.NOOP);
     }
 
-    private AgentLoopService agentLoopService(List<ObjectNode> messages, String userMessage, String conversationId) {
+    public String askWithTools(
+            String userMessage,
+            String sessionId,
+            String traceId,
+            AgentExecutionObserver observer
+    ) {
+        return runWithTools(userMessage, sessionId, traceId, observer).finalAnswer();
+    }
+
+    public AgentLoopResult runWithTools(
+            String userMessage,
+            String sessionId,
+            String traceId,
+            AgentExecutionObserver observer
+    ) {
+        String conversationId = normalizeSessionId(sessionId);
+        List<ObjectNode> messages = requestMessages(conversationId, userMessage);
+        AgentExecutionObserver safeObserver = observer == null ? AgentExecutionObserver.NOOP : observer;
+        AgentLoopService agentLoopService = agentLoopService(messages, userMessage, conversationId, safeObserver);
+        return agentLoopService.run(new AgentLoopRequest(userMessage, conversationId, traceId));
+    }
+
+    public AgentLoopResult resumeWithApprovedTool(
+            String checkpointJson,
+            AgentExecutionObserver observer
+    ) {
+        try {
+            JsonNode checkpoint = objectMapper.readTree(checkpointJson);
+            String userMessage = checkpoint.path("userMessage").asText();
+            String conversationId = checkpoint.path("conversationId").asText();
+            String traceId = checkpoint.path("traceId").asText();
+            int approvedStep = checkpoint.path("step").asInt();
+            List<ObjectNode> messages = new ArrayList<>();
+            checkpoint.path("messages").forEach(message -> messages.add((ObjectNode) message.deepCopy()));
+            JsonNode assistantMessage = checkpoint.path("assistantMessage");
+            JsonNode toolCall = checkpoint.path("toolCall");
+            String toolName = toolCall.path("function").path("name").asText();
+            String arguments = toolCall.path("function").path("arguments").asText("{}");
+            AgentExecutionObserver safeObserver = observer == null ? AgentExecutionObserver.NOOP : observer;
+
+            safeObserver.toolStarted(approvedStep, toolName);
+            AgentObservation observation = executeAgentTool(new AgentToolCall(toolName, arguments));
+            safeObserver.toolCompleted(
+                    approvedStep, toolName, observation.success(), observation.content());
+            messages.add(assistantMessageForNextRequest(assistantMessage));
+            messages.add(toolResultMessage(toolCall, observation.content()));
+
+            AgentLoopService loop = agentLoopService(
+                    messages, userMessage, conversationId, safeObserver);
+            return loop.runFrom(
+                    new AgentLoopRequest(userMessage, conversationId, traceId), approvedStep + 1);
+        } catch (IOException exception) {
+            throw new IllegalArgumentException("invalid agent approval checkpoint", exception);
+        }
+    }
+
+    private AgentLoopService agentLoopService(
+            List<ObjectNode> messages,
+            String userMessage,
+            String conversationId,
+            AgentExecutionObserver observer
+    ) {
         AtomicReference<JsonNode> pendingAssistantMessage = new AtomicReference<>();
         AtomicReference<JsonNode> pendingToolCall = new AtomicReference<>();
         AtomicInteger addedObservationCount = new AtomicInteger();
@@ -164,8 +228,18 @@ public class KimiToolCallingClient {
         return new AgentLoopService(
                 request -> new AgentPlan("Use available tools when needed, observe results, then answer."),
                 turn -> nextDecision(messages, userMessage, conversationId, pendingAssistantMessage, pendingToolCall,
-                        addedObservationCount, turn),
-                (traceId, toolCall) -> executeAgentTool(toolCall),
+                        addedObservationCount, observer, turn),
+                (traceId, toolCall) -> {
+                    observer.toolStarted(addedObservationCount.get() + 1, toolCall.name());
+                    AgentObservation observation = executeAgentTool(toolCall);
+                    observer.toolCompleted(
+                            addedObservationCount.get() + 1,
+                            toolCall.name(),
+                            observation.success(),
+                            observation.content()
+                    );
+                    return observation;
+                },
                 maxToolRounds
         );
     }
@@ -177,12 +251,15 @@ public class KimiToolCallingClient {
             AtomicReference<JsonNode> pendingAssistantMessage,
             AtomicReference<JsonNode> pendingToolCall,
             AtomicInteger addedObservationCount,
+            AgentExecutionObserver observer,
             AgentTurn turn
     ) {
         appendObservationMessages(messages, pendingAssistantMessage, pendingToolCall, addedObservationCount,
                 turn.observations());
 
-        JsonNode assistantMessage = callModel(messages);
+        observer.modelStarted(turn.step());
+        JsonNode assistantMessage = callModel(messages, observer, turn.step());
+        observer.modelCompleted(turn.step());
         JsonNode toolCalls = assistantMessage.path("tool_calls");
         if (!toolCalls.isArray() || toolCalls.isEmpty()) {
             String answer = assistantMessage.path("content").asText("");
@@ -195,7 +272,46 @@ public class KimiToolCallingClient {
         pendingToolCall.set(toolCall);
         String toolName = toolCall.path("function").path("name").asText();
         String arguments = toolCall.path("function").path("arguments").asText("{}");
+        observer.toolCallRequested(turn.step(), toolName, arguments);
+        if (observer.requiresApproval(turn.step(), toolName, arguments)) {
+            String checkpoint = approvalCheckpoint(
+                    messages,
+                    userMessage,
+                    conversationId,
+                    turn.traceId(),
+                    turn.step(),
+                    assistantMessage,
+                    toolCall
+            );
+            observer.approvalRequired(turn.step(), toolName, arguments, checkpoint);
+            throw new AgentLoopPausedException("agent is waiting for tool approval");
+        }
         return AgentDecision.toolCall(new AgentToolCall(toolName, arguments));
+    }
+
+    private String approvalCheckpoint(
+            List<ObjectNode> messages,
+            String userMessage,
+            String conversationId,
+            String traceId,
+            int step,
+            JsonNode assistantMessage,
+            JsonNode toolCall
+    ) {
+        ObjectNode checkpoint = objectMapper.createObjectNode();
+        checkpoint.put("schemaVersion", 1);
+        checkpoint.put("userMessage", userMessage);
+        checkpoint.put("conversationId", conversationId);
+        checkpoint.put("traceId", traceId);
+        checkpoint.put("step", step);
+        checkpoint.set("messages", messagesArray(messages));
+        checkpoint.set("assistantMessage", assistantMessage.deepCopy());
+        checkpoint.set("toolCall", toolCall.deepCopy());
+        try {
+            return objectMapper.writeValueAsString(checkpoint);
+        } catch (IOException exception) {
+            throw new IllegalStateException("failed to serialize agent approval checkpoint", exception);
+        }
     }
 
     private void appendObservationMessages(
@@ -262,14 +378,18 @@ public class KimiToolCallingClient {
         return messages.subList(fromIndex, messages.size());
     }
 
-    private JsonNode callModel(List<ObjectNode> messages) {
+    private JsonNode callModel(
+            List<ObjectNode> messages,
+            AgentExecutionObserver observer,
+            int step
+    ) {
         try {
             ObjectNode request = objectMapper.createObjectNode();
             request.put("model", model);
             request.set("messages", messagesArray(messages));
             request.put("temperature", temperature);
             request.put("max_tokens", maxTokens);
-            request.put("stream", false);
+            request.put("stream", true);
             request.set("thinking", thinking());
             request.set("tools", toolDefinitions());
             request.put("tool_choice", "auto");
@@ -284,19 +404,131 @@ public class KimiToolCallingClient {
                     .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(request)))
                     .build();
 
-            HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<InputStream> response = httpClient.send(
+                    httpRequest,
+                    HttpResponse.BodyHandlers.ofInputStream()
+            );
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 throw new IllegalStateException("Kimi request failed with status " + response.statusCode()
-                        + ": " + response.body());
+                        + ": " + new String(response.body().readAllBytes(), StandardCharsets.UTF_8));
             }
 
+            String contentType = response.headers().firstValue("Content-Type").orElse("");
+            if (contentType.toLowerCase(Locale.ROOT).contains("text/event-stream")) {
+                return readStreamingMessage(response.body(), observer, step);
+            }
             JsonNode root = objectMapper.readTree(response.body());
-            return root.path("choices").get(0).path("message");
+            JsonNode message = root.path("choices").get(0).path("message");
+            String content = message.path("content").asText("");
+            if (!content.isEmpty()) {
+                observer.tokenDelta(step, content);
+            }
+            return message;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Kimi request interrupted", e);
         } catch (IOException e) {
             throw new IllegalStateException("Kimi request failed: " + e.getMessage(), e);
+        }
+    }
+
+    private JsonNode readStreamingMessage(
+            InputStream body,
+            AgentExecutionObserver observer,
+            int step
+    ) throws IOException {
+        StringBuilder content = new StringBuilder();
+        StringBuilder reasoning = new StringBuilder();
+        Map<Integer, StreamingToolCall> toolCalls = new TreeMap<>();
+
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(body, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (!line.startsWith("data:")) {
+                    continue;
+                }
+                String data = line.substring("data:".length()).trim();
+                if (data.isEmpty() || "[DONE]".equals(data)) {
+                    continue;
+                }
+                JsonNode choice = objectMapper.readTree(data).path("choices").path(0);
+                JsonNode delta = choice.path("delta");
+                appendTextDelta(delta, "content", content, value -> observer.tokenDelta(step, value));
+                appendTextDelta(delta, "reasoning_content", reasoning, ignored -> {
+                });
+                appendToolCallDeltas(delta.path("tool_calls"), toolCalls);
+            }
+        }
+
+        ObjectNode message = objectMapper.createObjectNode();
+        message.put("role", "assistant");
+        message.put("content", content.toString());
+        if (!reasoning.isEmpty()) {
+            message.put("reasoning_content", reasoning.toString());
+        }
+        if (!toolCalls.isEmpty()) {
+            ArrayNode array = objectMapper.createArrayNode();
+            toolCalls.values().forEach(call -> array.add(call.toJson(objectMapper)));
+            message.set("tool_calls", array);
+        }
+        return message;
+    }
+
+    private void appendTextDelta(
+            JsonNode delta,
+            String field,
+            StringBuilder target,
+            java.util.function.Consumer<String> consumer
+    ) {
+        if (!delta.hasNonNull(field)) {
+            return;
+        }
+        String value = delta.path(field).asText("");
+        if (!value.isEmpty()) {
+            target.append(value);
+            consumer.accept(value);
+        }
+    }
+
+    private void appendToolCallDeltas(JsonNode deltas, Map<Integer, StreamingToolCall> toolCalls) {
+        if (!deltas.isArray()) {
+            return;
+        }
+        for (JsonNode delta : deltas) {
+            int index = delta.path("index").asInt(0);
+            StreamingToolCall call = toolCalls.computeIfAbsent(index, ignored -> new StreamingToolCall());
+            call.append(delta);
+        }
+    }
+
+    private static final class StreamingToolCall {
+
+        private String id = "";
+        private final StringBuilder name = new StringBuilder();
+        private final StringBuilder arguments = new StringBuilder();
+
+        void append(JsonNode delta) {
+            if (delta.hasNonNull("id")) {
+                id = delta.path("id").asText(id);
+            }
+            JsonNode function = delta.path("function");
+            if (function.hasNonNull("name")) {
+                name.append(function.path("name").asText());
+            }
+            if (function.hasNonNull("arguments")) {
+                arguments.append(function.path("arguments").asText());
+            }
+        }
+
+        ObjectNode toJson(ObjectMapper objectMapper) {
+            ObjectNode function = objectMapper.createObjectNode();
+            function.put("name", name.toString());
+            function.put("arguments", arguments.toString());
+            ObjectNode call = objectMapper.createObjectNode();
+            call.put("id", id);
+            call.put("type", "function");
+            call.set("function", function);
+            return call;
         }
     }
 

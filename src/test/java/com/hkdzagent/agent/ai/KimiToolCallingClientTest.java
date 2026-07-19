@@ -45,7 +45,8 @@ class KimiToolCallingClientTest {
         String methodSource = askWithToolsSource(source);
 
         assertThat(source).contains("AgentLoopService", "AgentLoopRequest", "AgentLoopResult");
-        assertThat(methodSource).contains(".run(new AgentLoopRequest");
+        assertThat(source).contains(".run(new AgentLoopRequest");
+        assertThat(methodSource).contains("AgentExecutionObserver.NOOP");
         assertThat(methodSource).doesNotContain("while (true)");
     }
 
@@ -205,6 +206,112 @@ class KimiToolCallingClientTest {
             assertThat(messageContents(otherSessionRequest))
                     .contains("fresh question")
                     .doesNotContain("first question", "answer 1");
+        }
+    }
+
+    @Test
+    void emitsRealTokenDeltasWhileReadingEventStream() throws Exception {
+        List<String> requestBodies = new ArrayList<>();
+        List<String> deltas = new ArrayList<>();
+
+        try (MockOpenAiServer server = MockOpenAiServer.start(requestBodies,
+                requestIndex -> streamingFinalResponse("AAPL ", "summary"))) {
+            KimiToolCallingClient client = (KimiToolCallingClient) newClient(
+                    server.baseUrl(), new TestChatMemory(), 5,
+                    request -> "unused", request -> "unused", request -> "unused"
+            );
+            AgentExecutionObserver observer = new AgentExecutionObserver() {
+                @Override
+                public void tokenDelta(int step, String delta) {
+                    deltas.add(delta);
+                }
+            };
+
+            String answer = client.askWithTools("Get AAPL quote", "stream-session", "trace-stream", observer);
+
+            assertThat(answer).isEqualTo("AAPL summary");
+            assertThat(deltas).containsExactly("AAPL ", "summary");
+            assertThat(readRequest(requestBodies, 0).path("stream").asBoolean()).isTrue();
+        }
+    }
+
+    @Test
+    void aggregatesStreamingToolCallDeltasBeforeExecutingTool() throws Exception {
+        List<String> requestBodies = new ArrayList<>();
+        AtomicReference<String> requestedUrl = new AtomicReference<>();
+
+        try (MockOpenAiServer server = MockOpenAiServer.start(requestBodies, requestIndex ->
+                requestIndex == 1
+                        ? streamingToolCallResponse()
+                        : streamingFinalResponse("quote ", "ready"))) {
+            KimiToolCallingClient client = (KimiToolCallingClient) newClient(
+                    server.baseUrl(), new TestChatMemory(), 5,
+                    request -> "unused", request -> "unused", request -> {
+                        requestedUrl.set(request.url());
+                        return "quote-data";
+                    }
+            );
+
+            String answer = client.askWithTools(
+                    "Get AAPL quote", "tool-stream", "trace-tool-stream", AgentExecutionObserver.NOOP);
+
+            assertThat(answer).isEqualTo("quote ready");
+            assertThat(requestedUrl.get())
+                    .isEqualTo("https://query1.finance.yahoo.com/v8/finance/chart/AAPL");
+            JsonNode assistant = firstAssistantToolCallMessage(readRequest(requestBodies, 1));
+            assertThat(assistant.path("tool_calls").get(0).path("function").path("name").asText())
+                    .isEqualTo("httpRequestTool");
+        }
+    }
+
+    @Test
+    void pausesBeforeSensitiveToolAndResumesFromDurableCheckpoint() throws Exception {
+        List<String> requestBodies = new ArrayList<>();
+        AtomicInteger commandExecutions = new AtomicInteger();
+        AtomicReference<String> checkpoint = new AtomicReference<>();
+
+        try (MockOpenAiServer server = MockOpenAiServer.start(requestBodies, requestIndex ->
+                requestIndex == 1
+                        ? toolCallResponse("need command", "commandExecuteTool", "{\"command\":\"mvn test\"}")
+                        : finalResponse("command completed"))) {
+            KimiToolCallingClient client = (KimiToolCallingClient) newClient(
+                    server.baseUrl(), new TestChatMemory(), 5,
+                    request -> "unused", request -> {
+                        commandExecutions.incrementAndGet();
+                        return "tests passed";
+                    }, request -> "unused"
+            );
+            AgentExecutionObserver approvalGate = new AgentExecutionObserver() {
+                @Override
+                public boolean requiresApproval(int step, String toolName, String arguments) {
+                    return "commandExecuteTool".equals(toolName);
+                }
+
+                @Override
+                public void approvalRequired(
+                        int step, String toolName, String arguments, String checkpointJson
+                ) {
+                    checkpoint.set(checkpointJson);
+                }
+            };
+
+            com.hkdzagent.agent.loop.AgentLoopResult paused = client.runWithTools(
+                    "Run tests", "approval-session", "trace-approval", approvalGate);
+
+            assertThat(paused.status())
+                    .isEqualTo(com.hkdzagent.agent.loop.AgentLoopResult.Status.WAITING_APPROVAL);
+            assertThat(commandExecutions).hasValue(0);
+            assertThat(checkpoint.get()).contains("commandExecuteTool", "trace-approval", "assistantMessage");
+
+            com.hkdzagent.agent.loop.AgentLoopResult resumed = client.resumeWithApprovedTool(
+                    checkpoint.get(), AgentExecutionObserver.NOOP);
+
+            assertThat(resumed.status())
+                    .isEqualTo(com.hkdzagent.agent.loop.AgentLoopResult.Status.COMPLETED);
+            assertThat(resumed.finalAnswer()).isEqualTo("command completed");
+            assertThat(commandExecutions).hasValue(1);
+            assertThat(firstToolMessage(readRequest(requestBodies, 1)).path("content").asText())
+                    .isEqualTo("tests passed");
         }
     }
 
@@ -370,6 +477,25 @@ class KimiToolCallingClientTest {
                 """.formatted(escapeJson(answer));
     }
 
+    private static String streamingFinalResponse(String first, String second) {
+        return "data: {\"choices\":[{\"delta\":{\"content\":\"" + escapeJson(first)
+                + "\"}}]}\n\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":\"" + escapeJson(second)
+                + "\"}}]}\n\n"
+                + "data: [DONE]\n\n";
+    }
+
+    private static String streamingToolCallResponse() {
+        return """
+                data: {"choices":[{"delta":{"reasoning_content":"need data","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"httpRequest","arguments":"{\\\"url\\\":\\\"https://query1.finance.yahoo.com"}}]}}]}
+
+                data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"Tool","arguments":"/v8/finance/chart/AAPL\\\"}"}}]}}]}
+
+                data: [DONE]
+
+                """;
+    }
+
     private static String escapeJson(String value) {
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
@@ -411,12 +537,15 @@ class KimiToolCallingClientTest {
         ) throws IOException {
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
             requestBodies.add(body);
-            writeJson(exchange, responseScript.responseFor(requestBodies.size()));
+            writeResponse(exchange, responseScript.responseFor(requestBodies.size()));
         }
 
-        private static void writeJson(HttpExchange exchange, String response) throws IOException {
+        private static void writeResponse(HttpExchange exchange, String response) throws IOException {
             byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
-            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.getResponseHeaders().add(
+                    "Content-Type",
+                    response.startsWith("data:") ? "text/event-stream" : "application/json"
+            );
             exchange.sendResponseHeaders(200, bytes.length);
             try (OutputStream outputStream = exchange.getResponseBody()) {
                 outputStream.write(bytes);

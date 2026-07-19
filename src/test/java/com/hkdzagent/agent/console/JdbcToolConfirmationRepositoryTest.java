@@ -32,6 +32,7 @@ class JdbcToolConfirmationRepositoryTest {
                     owner_key VARCHAR(320) NOT NULL,
                     session_id VARCHAR(256) NOT NULL,
                     trace_id VARCHAR(128),
+                    run_id UUID,
                     tool_name VARCHAR(128) NOT NULL,
                     request_hash VARCHAR(128) NOT NULL,
                     request_payload JSON NOT NULL,
