@@ -2,8 +2,9 @@ package com.hkdzagent.agent.functional;
 
 import com.hkdzagent.agent.ai.LLMClient;
 import com.hkdzagent.agent.im.FeishuAsyncConfig;
-import com.hkdzagent.agent.im.FeishuEventDeduplicator;
+import com.hkdzagent.agent.im.FeishuEventInboxService;
 import com.hkdzagent.agent.im.FeishuEventProcessor;
+import com.hkdzagent.agent.im.FeishuInboxConfig;
 import com.hkdzagent.agent.im.FeishuReplyClient;
 import com.hkdzagent.agent.im.FeishuSignatureVerifier;
 import com.hkdzagent.agent.im.FeishuWebhookController;
@@ -29,13 +30,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(FeishuWebhookController.class)
 @Import({
         FeishuSignatureVerifier.class,
-        FeishuEventDeduplicator.class,
+        FeishuEventInboxService.class,
         FeishuEventProcessor.class,
-        FeishuAsyncConfig.class
+        FeishuAsyncConfig.class,
+        FeishuInboxConfig.class
 })
 @TestPropertySource(properties = {
         "feishu.verification-token=test-verification-token",
-        "feishu.encrypt-key=test-encrypt-key"
+        "feishu.encrypt-key=test-encrypt-key",
+        "feishu.inbox.max-attempts=1"
 })
 class AgentFeishuWebhookFunctionalTest {
 

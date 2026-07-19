@@ -66,6 +66,10 @@ public class ProductionConfigurationValidator implements InitializingBean {
             unsafeProperties.add("agent.tool-approval.repository must be jdbc in prod");
         }
 
+        if (!jdbcFeishuInboxRepositoryEnabled()) {
+            unsafeProperties.add("feishu.inbox.repository must be jdbc in prod");
+        }
+
         if (!unsafeProperties.isEmpty()) {
             throw new IllegalStateException("Unsafe production configuration: " + String.join(", ", unsafeProperties));
         }
@@ -120,6 +124,11 @@ public class ProductionConfigurationValidator implements InitializingBean {
 
     private boolean jdbcToolApprovalRepositoryEnabled() {
         String repository = environment.getProperty("agent.tool-approval.repository", "");
+        return "jdbc".equalsIgnoreCase(repository.trim());
+    }
+
+    private boolean jdbcFeishuInboxRepositoryEnabled() {
+        String repository = environment.getProperty("feishu.inbox.repository", "");
         return "jdbc".equalsIgnoreCase(repository.trim());
     }
 }

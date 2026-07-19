@@ -54,6 +54,10 @@ class SecretConfigurationTest {
                 .isEqualTo("${AGENT_TOOL_APPROVAL_REPOSITORY:memory}");
         assertThat(applicationYml.getProperty("agent.tool-approval.ttl"))
                 .isEqualTo("${AGENT_TOOL_APPROVAL_TTL:15m}");
+        assertThat(applicationYml.getProperty("feishu.inbox.repository"))
+                .isEqualTo("${FEISHU_INBOX_REPOSITORY:memory}");
+        assertThat(applicationYml.getProperty("feishu.inbox.max-attempts"))
+                .isEqualTo("${FEISHU_INBOX_MAX_ATTEMPTS:3}");
         assertThat(applicationYml.getProperty("agent.rag.index-file"))
                 .isEqualTo("${AGENT_RAG_INDEX_FILE:data/rag-index.json}");
         assertThat(applicationYml.getProperty("agent.tools.security.allowed-commands"))
@@ -93,6 +97,8 @@ class SecretConfigurationTest {
                 Map.entry("FEISHU_ASYNC_CORE_SIZE", "3"),
                 Map.entry("FEISHU_ASYNC_MAX_SIZE", "6"),
                 Map.entry("FEISHU_ASYNC_QUEUE_CAPACITY", "200"),
+                Map.entry("FEISHU_INBOX_REPOSITORY", "jdbc"),
+                Map.entry("FEISHU_INBOX_MAX_ATTEMPTS", "5"),
                 Map.entry("TAVILY_API_KEY", "tavily-from-env"),
                 Map.entry("AGENT_KIMI_REQUEST_TIMEOUT", "45s"),
                 Map.entry("AGENT_KIMI_MAX_TOOL_ROUNDS", "7"),
@@ -115,6 +121,8 @@ class SecretConfigurationTest {
         assertThat(environment.getProperty("feishu.async.core-size")).isEqualTo("3");
         assertThat(environment.getProperty("feishu.async.max-size")).isEqualTo("6");
         assertThat(environment.getProperty("feishu.async.queue-capacity")).isEqualTo("200");
+        assertThat(environment.getProperty("feishu.inbox.repository")).isEqualTo("jdbc");
+        assertThat(environment.getProperty("feishu.inbox.max-attempts")).isEqualTo("5");
         assertThat(environment.getProperty("tavily.api-key")).isEqualTo("tavily-from-env");
         assertThat(environment.getProperty("agent.kimi.request-timeout")).isEqualTo("45s");
         assertThat(environment.getProperty("agent.kimi.max-tool-rounds")).isEqualTo("7");

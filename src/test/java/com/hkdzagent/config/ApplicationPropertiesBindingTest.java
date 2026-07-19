@@ -71,7 +71,13 @@ class ApplicationPropertiesBindingTest {
                 .withProperty("feishu.encrypt-key", "feishu-encrypt-key")
                 .withProperty("feishu.async.core-size", "3")
                 .withProperty("feishu.async.max-size", "6")
-                .withProperty("feishu.async.queue-capacity", "200");
+                .withProperty("feishu.async.queue-capacity", "200")
+                .withProperty("feishu.inbox.repository", "jdbc")
+                .withProperty("feishu.inbox.max-attempts", "5")
+                .withProperty("feishu.inbox.retry-delay", "45s")
+                .withProperty("feishu.inbox.processing-timeout", "10m")
+                .withProperty("feishu.inbox.poll-interval", "20s")
+                .withProperty("feishu.inbox.poll-batch-size", "50");
 
         ChatMemoryProperties memory = bind(environment, "agent.memory", ChatMemoryProperties.class);
         RagProperties rag = bind(environment, "agent.rag", RagProperties.class);
@@ -98,6 +104,12 @@ class ApplicationPropertiesBindingTest {
         assertThat(feishu.async().coreSize()).isEqualTo(3);
         assertThat(feishu.async().maxSize()).isEqualTo(6);
         assertThat(feishu.async().queueCapacity()).isEqualTo(200);
+        assertThat(feishu.inbox().repository()).isEqualTo("jdbc");
+        assertThat(feishu.inbox().maxAttempts()).isEqualTo(5);
+        assertThat(feishu.inbox().retryDelay()).isEqualTo(Duration.ofSeconds(45));
+        assertThat(feishu.inbox().processingTimeout()).isEqualTo(Duration.ofMinutes(10));
+        assertThat(feishu.inbox().pollInterval()).isEqualTo(Duration.ofSeconds(20));
+        assertThat(feishu.inbox().pollBatchSize()).isEqualTo(50);
     }
 
     @Test

@@ -42,7 +42,7 @@ Spring AI is pinned to the stable 1.1.x line because this project currently stay
   - perform Tavily-backed web search
   - search the local knowledge base
 - Local RAG prototype based on file-backed knowledge search
-- Feishu webhook endpoint with URL verification, signature verification hook, event deduplication, async processing, token provider, and reply client prototypes
+- Feishu webhook endpoint with URL verification, signature verification, durable event inbox option, async retry processing, token provider, and reply client
 - Baseline PostgreSQL, Redis, Docker Compose, and Flyway migration skeleton
 
 ## Project Structure
@@ -115,6 +115,12 @@ FEISHU_ENCRYPT_KEY=
 FEISHU_ASYNC_CORE_SIZE=2
 FEISHU_ASYNC_MAX_SIZE=4
 FEISHU_ASYNC_QUEUE_CAPACITY=100
+FEISHU_INBOX_REPOSITORY=memory
+FEISHU_INBOX_MAX_ATTEMPTS=3
+FEISHU_INBOX_RETRY_DELAY=30s
+FEISHU_INBOX_PROCESSING_TIMEOUT=5m
+FEISHU_INBOX_POLL_INTERVAL=30s
+FEISHU_INBOX_POLL_BATCH_SIZE=20
 
 TAVILY_API_KEY=
 
@@ -183,6 +189,8 @@ $env:AGENT_TOOL_APPROVAL_REPOSITORY = "jdbc"
 ```
 
 The defaults remain `AGENT_TRACE_REPOSITORY=memory`, `AGENT_MEMORY_REPOSITORY=file`, and `AGENT_TOOL_APPROVAL_REPOSITORY=memory` for fast local tests and development startup. The `prod` profile rejects these defaults and requires all three repositories to use `jdbc`.
+
+To persist and recover Feishu Webhook processing, set `FEISHU_INBOX_REPOSITORY=jdbc`. Production also requires this setting; local development defaults to memory.
 
 See `docs/infrastructure.md` for the current infrastructure boundary.
 
@@ -309,18 +317,17 @@ Approval records can be persisted in PostgreSQL, expire after a configurable TTL
 POST /api/feishu/webhook
 ```
 
-Handles Feishu URL verification and `im.message.receive_v1` events.
+Handles Feishu URL verification and `im.message.receive_v1` events. The optional JDBC inbox provides event-ID deduplication, atomic processing leases, scheduled retries, stale-work recovery, and terminal `DEAD` state.
 
 ## Known Production Gaps
 
 The following gaps are intentional tracking items for the production-grade upgrade:
 
 - No multi-user authentication or object-level authorization yet.
-- PostgreSQL/Redis/Flyway infrastructure exists, and Agent trace/chat memory/tool approvals have JDBC repository switches. Feishu inbox still needs durable runtime wiring.
+- PostgreSQL/Redis/Flyway infrastructure exists, and Agent trace/chat memory/tool approvals/Feishu inbox have JDBC repository switches.
 - Agent streaming is not yet true token-by-token runtime streaming.
 - Tool approval persistence is durable, but approval is not yet connected to pause/resume tool execution.
 - RAG is still local/file-backed, not pgvector hybrid retrieval.
-- Feishu event handling is not yet backed by a persistent inbox/dead-letter table.
 - No production Docker Compose stack yet.
 - Only a baseline CI quality gate exists; coverage, static analysis, container build, and integration-test gates are still missing.
 - No Prometheus/Grafana observability yet.

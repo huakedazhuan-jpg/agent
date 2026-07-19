@@ -38,7 +38,8 @@ class ProductionConfigurationValidatorTest {
                         "spring.flyway.enabled=true",
                         "agent.trace.repository=jdbc",
                         "agent.memory.repository=jdbc",
-                        "agent.tool-approval.repository=jdbc"
+                        "agent.tool-approval.repository=jdbc",
+                        "feishu.inbox.repository=jdbc"
                 )
                 .run(context -> {
                     assertThat(context).hasFailed();
@@ -69,7 +70,8 @@ class ProductionConfigurationValidatorTest {
                         "spring.flyway.enabled=true",
                         "agent.trace.repository=jdbc",
                         "agent.memory.repository=jdbc",
-                        "agent.tool-approval.repository=jdbc"
+                        "agent.tool-approval.repository=jdbc",
+                        "feishu.inbox.repository=jdbc"
                 )
                 .run(context -> {
                     assertThat(context).hasFailed();
@@ -100,7 +102,8 @@ class ProductionConfigurationValidatorTest {
                         "spring.flyway.enabled=true",
                         "agent.trace.repository=jdbc",
                         "agent.memory.repository=jdbc",
-                        "agent.tool-approval.repository=jdbc"
+                        "agent.tool-approval.repository=jdbc",
+                        "feishu.inbox.repository=jdbc"
                 )
                 .run(context -> assertThat(context).hasNotFailed());
     }
@@ -127,7 +130,8 @@ class ProductionConfigurationValidatorTest {
                         "spring.flyway.enabled=false",
                         "agent.trace.repository=jdbc",
                         "agent.memory.repository=jdbc",
-                        "agent.tool-approval.repository=jdbc"
+                        "agent.tool-approval.repository=jdbc",
+                        "feishu.inbox.repository=jdbc"
                 )
                 .run(context -> {
                     assertThat(context).hasFailed();
@@ -158,7 +162,8 @@ class ProductionConfigurationValidatorTest {
                         "spring.flyway.enabled=true",
                         "agent.trace.repository=memory",
                         "agent.memory.repository=jdbc",
-                        "agent.tool-approval.repository=jdbc"
+                        "agent.tool-approval.repository=jdbc",
+                        "feishu.inbox.repository=jdbc"
                 )
                 .run(context -> {
                     assertThat(context).hasFailed();
@@ -189,7 +194,8 @@ class ProductionConfigurationValidatorTest {
                         "spring.flyway.enabled=true",
                         "agent.trace.repository=jdbc",
                         "agent.memory.repository=file",
-                        "agent.tool-approval.repository=jdbc"
+                        "agent.tool-approval.repository=jdbc",
+                        "feishu.inbox.repository=jdbc"
                 )
                 .run(context -> {
                     assertThat(context).hasFailed();
@@ -220,12 +226,45 @@ class ProductionConfigurationValidatorTest {
                         "spring.flyway.enabled=true",
                         "agent.trace.repository=jdbc",
                         "agent.memory.repository=jdbc",
-                        "agent.tool-approval.repository=memory"
+                        "agent.tool-approval.repository=memory",
+                        "feishu.inbox.repository=jdbc"
                 )
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure())
                             .hasRootCauseMessage("Unsafe production configuration: agent.tool-approval.repository must be jdbc in prod");
+                });
+    }
+
+    @Test
+    void failsFastWhenProductionUsesInMemoryFeishuInboxRepository() {
+        contextRunner
+                .withPropertyValues(
+                        "spring.profiles.active=prod",
+                        "spring.ai.openai.api-key=prod-openai-key",
+                        "spring.ai.openai.base-url=https://api.moonshot.ai",
+                        "spring.ai.openai.chat.options.model=kimi-k2.5",
+                        "feishu.app-id=prod-feishu-app",
+                        "feishu.app-secret=prod-feishu-secret",
+                        "feishu.verification-token=prod-feishu-verification-token",
+                        "feishu.encrypt-key=prod-feishu-encrypt-key",
+                        "tavily.api-key=prod-tavily-key",
+                        "agent.tools.security.workspace-root=/srv/xingclaw-agent/workspace",
+                        "spring.datasource.url=jdbc:postgresql://postgres.internal:5432/xingclaw_agent",
+                        "spring.datasource.username=prod_agent",
+                        "spring.datasource.password=prod-postgres-password",
+                        "spring.data.redis.host=redis.internal",
+                        "spring.data.redis.password=prod-redis-password",
+                        "spring.flyway.enabled=true",
+                        "agent.trace.repository=jdbc",
+                        "agent.memory.repository=jdbc",
+                        "agent.tool-approval.repository=jdbc",
+                        "feishu.inbox.repository=memory"
+                )
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasRootCauseMessage("Unsafe production configuration: feishu.inbox.repository must be jdbc in prod");
                 });
     }
 }

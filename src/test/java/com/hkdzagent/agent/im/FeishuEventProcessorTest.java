@@ -1,0 +1,170 @@
+package com.hkdzagent.agent.im;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hkdzagent.agent.ai.LLMClient;
+import org.junit.jupiter.api.Test;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+class FeishuEventProcessorTest {
+
+    @Test
+    void marksSuccessfullyHandledEventAsProcessed() {
+        InMemoryFeishuEventInboxRepository repository = new InMemoryFeishuEventInboxRepository();
+        MutableClock clock = new MutableClock(Instant.parse("2026-01-01T00:00:00Z"));
+        LLMClient llmClient = mock(LLMClient.class);
+        FeishuReplyClient replyClient = mock(FeishuReplyClient.class);
+        when(llmClient.askWithTools("hello", "open-1")).thenReturn("answer");
+        repository.receive(event("event-success", clock.instant()));
+
+        processor(repository, clock, llmClient, replyClient, Runnable::run, 3)
+                .processAsync("event-success");
+
+        FeishuInboxEvent stored = repository.findById("event-success");
+        assertThat(stored.status()).isEqualTo(FeishuInboxEvent.Status.PROCESSED);
+        assertThat(stored.retryCount()).isOne();
+        assertThat(stored.processedAt()).isEqualTo(clock.instant());
+        verify(replyClient).replyText("open-1", "answer");
+    }
+
+    @Test
+    void retriesTransientFailureThenMovesExhaustedEventToDead() {
+        InMemoryFeishuEventInboxRepository repository = new InMemoryFeishuEventInboxRepository();
+        MutableClock clock = new MutableClock(Instant.parse("2026-01-01T00:00:00Z"));
+        LLMClient llmClient = mock(LLMClient.class);
+        FeishuReplyClient replyClient = mock(FeishuReplyClient.class);
+        when(llmClient.askWithTools("hello", "open-1"))
+                .thenThrow(new IllegalStateException("api_key=secret-value model unavailable"));
+        repository.receive(event("event-failure", clock.instant()));
+        FeishuEventProcessor processor = processor(
+                repository, clock, llmClient, replyClient, Runnable::run, 2
+        );
+
+        processor.processAsync("event-failure");
+
+        FeishuInboxEvent retryable = repository.findById("event-failure");
+        assertThat(retryable.status()).isEqualTo(FeishuInboxEvent.Status.RETRYABLE);
+        assertThat(retryable.lastError()).contains("[redacted]").doesNotContain("secret-value");
+        verify(replyClient, never()).replyText(anyString(), anyString());
+
+        clock.advance(Duration.ofSeconds(30));
+        processor.processAsync("event-failure");
+
+        assertThat(repository.findById("event-failure").status())
+                .isEqualTo(FeishuInboxEvent.Status.DEAD);
+        verify(llmClient, times(2)).askWithTools("hello", "open-1");
+        verify(replyClient).replyText(org.mockito.ArgumentMatchers.eq("open-1"), anyString());
+    }
+
+    @Test
+    void leavesReceivedEventRecoverableWhenExecutorRejectsSubmission() {
+        InMemoryFeishuEventInboxRepository repository = new InMemoryFeishuEventInboxRepository();
+        MutableClock clock = new MutableClock(Instant.parse("2026-01-01T00:00:00Z"));
+        repository.receive(event("event-rejected", clock.instant()));
+        Executor rejectingExecutor = task -> {
+            throw new RejectedExecutionException("queue full");
+        };
+        FeishuEventProcessor processor = processor(
+                repository,
+                clock,
+                mock(LLMClient.class),
+                mock(FeishuReplyClient.class),
+                rejectingExecutor,
+                3
+        );
+
+        assertThatCode(() -> processor.processAsync("event-rejected")).doesNotThrowAnyException();
+        assertThat(repository.findById("event-rejected").status())
+                .isEqualTo(FeishuInboxEvent.Status.RECEIVED);
+        assertThat(repository.findReadyEventIds(
+                clock.instant(), Duration.ofMinutes(5), 3, 10))
+                .containsExactly("event-rejected");
+    }
+
+    private FeishuEventProcessor processor(
+            FeishuEventInboxRepository repository,
+            Clock clock,
+            LLMClient llmClient,
+            FeishuReplyClient replyClient,
+            Executor executor,
+            int maxAttempts
+    ) {
+        FeishuProperties properties = new FeishuProperties();
+        properties.inbox().setMaxAttempts(maxAttempts);
+        properties.inbox().setRetryDelay(Duration.ofSeconds(30));
+        properties.inbox().setProcessingTimeout(Duration.ofMinutes(5));
+        return new FeishuEventProcessor(
+                new ObjectMapper(), llmClient, replyClient, repository, properties, executor, clock
+        );
+    }
+
+    private FeishuInboxEvent event(String eventId, Instant receivedAt) {
+        String payload = """
+                {
+                  "header": {
+                    "event_id": "%s",
+                    "event_type": "im.message.receive_v1"
+                  },
+                  "event": {
+                    "sender": {"sender_id": {"open_id": "open-1"}},
+                    "message": {"content": "{\\"text\\":\\"hello\\"}"}
+                  }
+                }
+                """.formatted(eventId);
+        return new FeishuInboxEvent(
+                eventId,
+                "im.message.receive_v1",
+                "open-1",
+                payload,
+                FeishuInboxEvent.Status.RECEIVED,
+                receivedAt,
+                null,
+                null,
+                receivedAt,
+                0,
+                null
+        );
+    }
+
+    private static final class MutableClock extends Clock {
+
+        private Instant instant;
+
+        private MutableClock(Instant instant) {
+            this.instant = instant;
+        }
+
+        private void advance(Duration duration) {
+            instant = instant.plus(duration);
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneId.of("UTC");
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return instant;
+        }
+    }
+}

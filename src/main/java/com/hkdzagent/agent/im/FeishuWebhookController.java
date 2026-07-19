@@ -16,18 +16,18 @@ public class FeishuWebhookController {
 
     private final ObjectMapper objectMapper;
     private final FeishuSignatureVerifier signatureVerifier;
-    private final FeishuEventDeduplicator eventDeduplicator;
+    private final FeishuEventInboxService eventInboxService;
     private final FeishuEventProcessor eventProcessor;
 
     public FeishuWebhookController(
             ObjectMapper objectMapper,
             FeishuSignatureVerifier signatureVerifier,
-            FeishuEventDeduplicator eventDeduplicator,
+            FeishuEventInboxService eventInboxService,
             FeishuEventProcessor eventProcessor
     ) {
         this.objectMapper = objectMapper;
         this.signatureVerifier = signatureVerifier;
-        this.eventDeduplicator = eventDeduplicator;
+        this.eventInboxService = eventInboxService;
         this.eventProcessor = eventProcessor;
     }
 
@@ -46,8 +46,9 @@ public class FeishuWebhookController {
             return ResponseEntity.ok(Map.of("challenge", payload.path("challenge").asText()));
         }
 
-        if (isMessageEvent(payload) && eventDeduplicator.firstSeen(eventKey(payload))) {
-            eventProcessor.processAsync(payload);
+        if (isMessageEvent(payload)) {
+            String eventId = eventInboxService.receive(payload, body);
+            eventProcessor.processAsync(eventId);
         }
 
         return ResponseEntity.ok(Map.of("code", 0, "msg", "success"));
@@ -57,11 +58,4 @@ public class FeishuWebhookController {
         return "im.message.receive_v1".equals(payload.path("header").path("event_type").asText());
     }
 
-    private String eventKey(JsonNode payload) {
-        String eventId = payload.path("header").path("event_id").asText();
-        if (!eventId.isBlank()) {
-            return eventId;
-        }
-        return payload.path("event").path("message").path("message_id").asText();
-    }
 }

@@ -1,6 +1,6 @@
 # Infrastructure
 
-This phase introduces baseline durable infrastructure. Agent trace, chat memory, and tool approvals can now use PostgreSQL through JDBC repositories. Feishu inbox processing still uses a prototype runtime adapter.
+This phase introduces baseline durable infrastructure. Agent trace, chat memory, tool approvals, and the Feishu event inbox can now use PostgreSQL through JDBC repositories.
 
 ## Services
 
@@ -77,8 +77,23 @@ AGENT_TOOL_APPROVAL_TTL=15m
 
 Approval decisions use a conditional database update from `PENDING` to `APPROVED` or `REJECTED`. This prevents two application instances from deciding the same approval twice. Expired pending records transition to `EXPIRED`, and only sanitized argument previews are persisted.
 
-The defaults remain `AGENT_TRACE_REPOSITORY=memory`, `AGENT_MEMORY_REPOSITORY=file`, and `AGENT_TOOL_APPROVAL_REPOSITORY=memory` so local tests and development startup do not require a running database. Feishu event inbox wiring remains planned Phase 2 work.
+Feishu Webhook events can use a durable inbox:
+
+```properties
+FEISHU_INBOX_REPOSITORY=jdbc
+FEISHU_INBOX_MAX_ATTEMPTS=3
+FEISHU_INBOX_RETRY_DELAY=30s
+FEISHU_INBOX_PROCESSING_TIMEOUT=5m
+FEISHU_INBOX_POLL_INTERVAL=30s
+FEISHU_INBOX_POLL_BATCH_SIZE=20
+```
+
+The inbox stores each event before asynchronous processing, deduplicates by event ID, atomically claims work, retries transient failures, recovers stale processing leases, and moves exhausted events to `DEAD` for inspection.
+
+The processing guarantee is at-least-once, not strict exactly-once. If an external Feishu reply succeeds and the process stops before the inbox row is marked `PROCESSED`, lease recovery can repeat the reply. Removing that final ambiguity requires an idempotency guarantee from the external send operation or a separate transactional outbox/send-receipt design.
+
+The defaults remain `AGENT_TRACE_REPOSITORY=memory`, `AGENT_MEMORY_REPOSITORY=file`, `AGENT_TOOL_APPROVAL_REPOSITORY=memory`, and `FEISHU_INBOX_REPOSITORY=memory` so local tests and development startup do not require a running database.
 
 ## Current safety boundary
 
-The local default passwords in `.env.example` and `docker-compose.yml` are only for development. Production must provide explicit database and Redis credentials through environment variables or a secret manager. Production also must enable Flyway and set `AGENT_TRACE_REPOSITORY=jdbc`, `AGENT_MEMORY_REPOSITORY=jdbc`, and `AGENT_TOOL_APPROVAL_REPOSITORY=jdbc`.
+The local default passwords in `.env.example` and `docker-compose.yml` are only for development. Production must provide explicit database and Redis credentials through environment variables or a secret manager. Production also must enable Flyway and set `AGENT_TRACE_REPOSITORY=jdbc`, `AGENT_MEMORY_REPOSITORY=jdbc`, `AGENT_TOOL_APPROVAL_REPOSITORY=jdbc`, and `FEISHU_INBOX_REPOSITORY=jdbc`.

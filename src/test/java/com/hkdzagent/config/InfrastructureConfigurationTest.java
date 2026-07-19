@@ -139,6 +139,21 @@ class InfrastructureConfigurationTest {
     }
 
     @Test
+    void fifthFlywayMigrationAddsFeishuInboxLeaseAndRetrySchedule() throws IOException {
+        Path migration = PROJECT_ROOT.resolve(
+                "src/main/resources/db/migration/postgresql/V5__durable_feishu_event_inbox.sql"
+        );
+        String sql = Files.readString(migration);
+
+        assertThat(sql).contains(
+                "ALTER TABLE feishu_event_inbox",
+                "ADD COLUMN claimed_at TIMESTAMPTZ",
+                "ADD COLUMN next_attempt_at TIMESTAMPTZ",
+                "CREATE INDEX ix_feishu_event_inbox_retry_schedule"
+        );
+    }
+
+    @Test
     void environmentTemplateDocumentsInfrastructureSettings() throws IOException {
         String envExample = Files.readString(PROJECT_ROOT.resolve(".env.example"));
 
@@ -152,7 +167,9 @@ class InfrastructureConfigurationTest {
                 "AGENT_TRACE_REPOSITORY=memory",
                 "AGENT_TOOL_APPROVAL_REPOSITORY=memory",
                 "AGENT_TOOL_APPROVAL_TTL=15m",
-                "AGENT_MEMORY_REPOSITORY=file"
+                "AGENT_MEMORY_REPOSITORY=file",
+                "FEISHU_INBOX_REPOSITORY=memory",
+                "FEISHU_INBOX_MAX_ATTEMPTS=3"
         );
     }
 
