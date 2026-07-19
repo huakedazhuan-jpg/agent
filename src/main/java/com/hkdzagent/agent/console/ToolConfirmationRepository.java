@@ -7,7 +7,7 @@ public interface ToolConfirmationRepository {
 
     ToolConfirmation save(ToolConfirmation confirmation);
 
-    List<ToolConfirmation> findPendingBySessionId(String sessionId);
+    List<ToolConfirmation> findPendingByOwnerAndSessionId(String ownerKey, String sessionId);
 
     ToolConfirmation findById(String confirmationId);
 

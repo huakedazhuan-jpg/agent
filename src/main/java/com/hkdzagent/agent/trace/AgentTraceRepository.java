@@ -8,7 +8,11 @@ public interface AgentTraceRepository {
 
     AgentTrace findByTraceId(String traceId);
 
+    AgentTrace findByTraceIdAndOwner(String traceId, String ownerKey);
+
     List<AgentTrace> findRecent(int limit);
+
+    List<AgentTrace> findRecentByOwner(String ownerKey, int limit);
 
     default void addEvent(String traceId, AgentTraceEvent event) {
         AgentTrace trace = findByTraceId(traceId);

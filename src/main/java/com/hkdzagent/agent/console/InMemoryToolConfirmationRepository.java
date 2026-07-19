@@ -17,10 +17,11 @@ public class InMemoryToolConfirmationRepository implements ToolConfirmationRepos
     }
 
     @Override
-    public synchronized List<ToolConfirmation> findPendingBySessionId(String sessionId) {
+    public synchronized List<ToolConfirmation> findPendingByOwnerAndSessionId(String ownerKey, String sessionId) {
         List<ToolConfirmation> pending = new ArrayList<>();
         for (ToolConfirmation confirmation : confirmations.values()) {
             if (confirmation.status() == ToolConfirmation.Status.PENDING
+                    && confirmation.ownerKey().equals(ownerKey)
                     && confirmation.sessionId().equals(sessionId)) {
                 pending.add(confirmation);
             }
@@ -46,6 +47,7 @@ public class InMemoryToolConfirmationRepository implements ToolConfirmationRepos
         }
         ToolConfirmation decided = new ToolConfirmation(
                 current.id(),
+                current.ownerKey(),
                 current.sessionId(),
                 current.traceId(),
                 current.toolName(),

@@ -1,6 +1,7 @@
 package com.hkdzagent.agent.console;
 
 import com.hkdzagent.agent.trace.AgentTraceSanitizer;
+import com.hkdzagent.agent.security.ActorIdentity;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -54,9 +55,20 @@ public class ToolConfirmationService {
             String toolName,
             String arguments
     ) {
+        return requestConfirmation(ActorIdentity.localAnonymous(), sessionId, traceId, toolName, arguments);
+    }
+
+    public ToolConfirmation requestConfirmation(
+            ActorIdentity owner,
+            String sessionId,
+            String traceId,
+            String toolName,
+            String arguments
+    ) {
         Instant createdAt = clock.instant();
         return repository.save(new ToolConfirmation(
                 UUID.randomUUID().toString(),
+                owner.key(),
                 normalize(sessionId),
                 traceId,
                 toolName,
@@ -69,9 +81,9 @@ public class ToolConfirmationService {
         ));
     }
 
-    public List<ToolConfirmation> findPendingBySessionId(String sessionId) {
+    public List<ToolConfirmation> findPendingBySessionId(ActorIdentity owner, String sessionId) {
         repository.expirePendingBefore(clock.instant());
-        return repository.findPendingBySessionId(normalize(sessionId));
+        return repository.findPendingByOwnerAndSessionId(owner.key(), normalize(sessionId));
     }
 
     public ToolConfirmation findById(String confirmationId) {

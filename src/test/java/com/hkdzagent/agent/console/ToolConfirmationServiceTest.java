@@ -1,5 +1,6 @@
 package com.hkdzagent.agent.console;
 
+import com.hkdzagent.agent.security.ActorIdentity;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Constructor;
@@ -32,13 +33,23 @@ class ToolConfirmationServiceTest {
         assertThat(invoke(pending, "status").toString()).isEqualTo("PENDING");
         assertThat(invoke(pending, "expiresAt")).isNotNull();
 
-        List<?> pendingItems = (List<?>) invoke(service, "findPendingBySessionId", "console-session");
+        List<?> pendingItems = (List<?>) invoke(
+                service,
+                "findPendingBySessionId",
+                ActorIdentity.localAnonymous(),
+                "console-session"
+        );
         assertThat(pendingItems).hasSize(1);
         assertThat(invoke(pendingItems.get(0), "id")).isEqualTo(confirmationId);
 
         Object approved = invoke(service, "approve", confirmationId);
         assertThat(invoke(approved, "status").toString()).isEqualTo("APPROVED");
-        assertThat((List<?>) invoke(service, "findPendingBySessionId", "console-session")).isEmpty();
+        assertThat((List<?>) invoke(
+                service,
+                "findPendingBySessionId",
+                ActorIdentity.localAnonymous(),
+                "console-session"
+        )).isEmpty();
 
         assertThatThrownBy(() -> invoke(service, "reject", confirmationId, "late rejection"))
                 .hasCauseInstanceOf(IllegalStateException.class)

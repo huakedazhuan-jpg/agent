@@ -32,7 +32,8 @@ public class JdbcAgentTraceRepository implements AgentTraceRepository {
         MapSqlParameterSource parameters = traceParameters(trace);
         int updated = jdbcTemplate.update("""
                 UPDATE agent_traces
-                SET session_id = :sessionId,
+                SET owner_key = :ownerKey,
+                    session_id = :sessionId,
                     user_message = :userMessage,
                     status = :status,
                     started_at = :startedAt,
@@ -42,8 +43,12 @@ public class JdbcAgentTraceRepository implements AgentTraceRepository {
                 parameters);
         if (updated == 0) {
             jdbcTemplate.update("""
-                    INSERT INTO agent_traces (trace_id, session_id, user_message, status, started_at, ended_at)
-                    VALUES (:traceId, :sessionId, :userMessage, :status, :startedAt, :endedAt)
+                    INSERT INTO agent_traces (
+                        trace_id, owner_key, session_id, user_message, status, started_at, ended_at
+                    )
+                    VALUES (
+                        :traceId, :ownerKey, :sessionId, :userMessage, :status, :startedAt, :endedAt
+                    )
                     """,
                     parameters);
         }
@@ -59,7 +64,7 @@ public class JdbcAgentTraceRepository implements AgentTraceRepository {
     public AgentTrace findByTraceId(String traceId) {
         try {
             AgentTrace trace = jdbcTemplate.queryForObject("""
-                    SELECT trace_id, session_id, user_message, status, started_at, ended_at
+                    SELECT trace_id, owner_key, session_id, user_message, status, started_at, ended_at
                     FROM agent_traces
                     WHERE trace_id = :traceId
                     """,
@@ -68,16 +73,26 @@ public class JdbcAgentTraceRepository implements AgentTraceRepository {
             if (trace == null) {
                 return null;
             }
-            List<AgentTraceEvent> events = findEvents(traceId);
-            return new AgentTrace(
-                    trace.traceId(),
-                    trace.sessionId(),
-                    trace.userMessage(),
-                    trace.startedAt(),
-                    trace.status(),
-                    trace.endedAt(),
-                    events
-            );
+            return withEvents(trace);
+        } catch (EmptyResultDataAccessException e) {
+            return null;
+        }
+    }
+
+    @Override
+    public AgentTrace findByTraceIdAndOwner(String traceId, String ownerKey) {
+        try {
+            AgentTrace trace = jdbcTemplate.queryForObject("""
+                    SELECT trace_id, owner_key, session_id, user_message, status, started_at, ended_at
+                    FROM agent_traces
+                    WHERE trace_id = :traceId
+                      AND owner_key = :ownerKey
+                    """,
+                    new MapSqlParameterSource()
+                            .addValue("traceId", traceId)
+                            .addValue("ownerKey", ownerKey),
+                    this::mapTrace);
+            return trace == null ? null : withEvents(trace);
         } catch (EmptyResultDataAccessException e) {
             return null;
         }
@@ -93,6 +108,25 @@ public class JdbcAgentTraceRepository implements AgentTraceRepository {
                 LIMIT :limit
                 """,
                 new MapSqlParameterSource("limit", safeLimit),
+                String.class);
+        return traceIds.stream()
+                .map(this::findByTraceId)
+                .toList();
+    }
+
+    @Override
+    public List<AgentTrace> findRecentByOwner(String ownerKey, int limit) {
+        int safeLimit = Math.max(1, limit);
+        List<String> traceIds = jdbcTemplate.queryForList("""
+                SELECT trace_id
+                FROM agent_traces
+                WHERE owner_key = :ownerKey
+                ORDER BY started_at DESC, trace_id DESC
+                LIMIT :limit
+                """,
+                new MapSqlParameterSource()
+                        .addValue("ownerKey", ownerKey)
+                        .addValue("limit", safeLimit),
                 String.class);
         return traceIds.stream()
                 .map(this::findByTraceId)
@@ -192,6 +226,7 @@ public class JdbcAgentTraceRepository implements AgentTraceRepository {
     private AgentTrace mapTrace(ResultSet rs, int rowNum) throws SQLException {
         return new AgentTrace(
                 rs.getString("trace_id"),
+                rs.getString("owner_key"),
                 rs.getString("session_id"),
                 rs.getString("user_message"),
                 rs.getTimestamp("started_at").toInstant(),
@@ -201,9 +236,23 @@ public class JdbcAgentTraceRepository implements AgentTraceRepository {
         );
     }
 
+    private AgentTrace withEvents(AgentTrace trace) {
+        return new AgentTrace(
+                trace.traceId(),
+                trace.ownerKey(),
+                trace.sessionId(),
+                trace.userMessage(),
+                trace.startedAt(),
+                trace.status(),
+                trace.endedAt(),
+                findEvents(trace.traceId())
+        );
+    }
+
     private MapSqlParameterSource traceParameters(AgentTrace trace) {
         return new MapSqlParameterSource()
                 .addValue("traceId", trace.traceId())
+                .addValue("ownerKey", trace.ownerKey())
                 .addValue("sessionId", trace.sessionId())
                 .addValue("userMessage", trace.userMessage())
                 .addValue("status", trace.status().name())

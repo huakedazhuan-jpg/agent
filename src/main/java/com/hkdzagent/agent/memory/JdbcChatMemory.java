@@ -39,14 +39,14 @@ public class JdbcChatMemory implements ChatMemory {
         if (newMessages == null || newMessages.isEmpty()) {
             return;
         }
-        String requiredConversationId = requireConversationId(conversationId);
-        transactionOperations.executeWithoutResult(status -> addInTransaction(requiredConversationId, newMessages));
+        OwnedConversationId identity = conversationIdentity(conversationId);
+        transactionOperations.executeWithoutResult(status -> addInTransaction(identity, newMessages));
     }
 
     @Override
     public synchronized List<Message> get(String conversationId) {
-        String requiredConversationId = requireConversationId(conversationId);
-        UUID databaseConversationId = findConversationId(requiredConversationId);
+        OwnedConversationId identity = conversationIdentity(conversationId);
+        UUID databaseConversationId = findConversationId(identity);
         if (databaseConversationId == null) {
             return List.of();
         }
@@ -62,12 +62,12 @@ public class JdbcChatMemory implements ChatMemory {
 
     @Override
     public synchronized void clear(String conversationId) {
-        String requiredConversationId = requireConversationId(conversationId);
-        transactionOperations.executeWithoutResult(status -> clearInTransaction(requiredConversationId));
+        OwnedConversationId identity = conversationIdentity(conversationId);
+        transactionOperations.executeWithoutResult(status -> clearInTransaction(identity));
     }
 
-    private void addInTransaction(String conversationId, List<Message> newMessages) {
-        UUID databaseConversationId = findOrCreateConversation(conversationId);
+    private void addInTransaction(OwnedConversationId identity, List<Message> newMessages) {
+        UUID databaseConversationId = findOrCreateConversation(identity);
         int nextIndex = nextMessageIndex(databaseConversationId);
         Instant now = Instant.now();
         for (Message message : newMessages) {
@@ -100,8 +100,8 @@ public class JdbcChatMemory implements ChatMemory {
         touchConversation(databaseConversationId);
     }
 
-    private void clearInTransaction(String conversationId) {
-        UUID databaseConversationId = findConversationId(conversationId);
+    private void clearInTransaction(OwnedConversationId identity) {
+        UUID databaseConversationId = findConversationId(identity);
         if (databaseConversationId == null) {
             return;
         }
@@ -113,8 +113,8 @@ public class JdbcChatMemory implements ChatMemory {
         touchConversation(databaseConversationId);
     }
 
-    private UUID findOrCreateConversation(String conversationId) {
-        UUID existingConversationId = findConversationId(conversationId);
+    private UUID findOrCreateConversation(OwnedConversationId identity) {
+        UUID existingConversationId = findConversationId(identity);
         if (existingConversationId != null) {
             return existingConversationId;
         }
@@ -124,6 +124,7 @@ public class JdbcChatMemory implements ChatMemory {
         jdbcTemplate.update("""
                 INSERT INTO agent_conversations (
                     id,
+                    owner_key,
                     channel,
                     external_conversation_id,
                     title,
@@ -132,6 +133,7 @@ public class JdbcChatMemory implements ChatMemory {
                 )
                 VALUES (
                     :id,
+                    :ownerKey,
                     :channel,
                     :externalConversationId,
                     :title,
@@ -141,25 +143,28 @@ public class JdbcChatMemory implements ChatMemory {
                 """,
                 new MapSqlParameterSource()
                         .addValue("id", databaseConversationId)
+                        .addValue("ownerKey", identity.owner().key())
                         .addValue("channel", CHANNEL)
-                        .addValue("externalConversationId", conversationId)
-                        .addValue("title", title(conversationId))
+                        .addValue("externalConversationId", identity.externalId())
+                        .addValue("title", title(identity.externalId()))
                         .addValue("createdAt", Timestamp.from(now))
                         .addValue("updatedAt", Timestamp.from(now)));
         return databaseConversationId;
     }
 
-    private UUID findConversationId(String conversationId) {
+    private UUID findConversationId(OwnedConversationId identity) {
         try {
             return jdbcTemplate.queryForObject("""
                     SELECT id
                     FROM agent_conversations
-                    WHERE channel = :channel
+                    WHERE owner_key = :ownerKey
+                      AND channel = :channel
                       AND external_conversation_id = :externalConversationId
                     """,
                     new MapSqlParameterSource()
+                            .addValue("ownerKey", identity.owner().key())
                             .addValue("channel", CHANNEL)
-                            .addValue("externalConversationId", conversationId),
+                            .addValue("externalConversationId", identity.externalId()),
                     UUID.class);
         } catch (EmptyResultDataAccessException e) {
             return null;
@@ -201,11 +206,11 @@ public class JdbcChatMemory implements ChatMemory {
         return new AssistantMessage(content);
     }
 
-    private String requireConversationId(String conversationId) {
+    private OwnedConversationId conversationIdentity(String conversationId) {
         if (conversationId == null || conversationId.isBlank()) {
             throw new IllegalArgumentException("conversationId must not be blank");
         }
-        return conversationId;
+        return OwnedConversationId.decodeOrLegacy(conversationId);
     }
 
     private String title(String conversationId) {

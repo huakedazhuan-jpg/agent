@@ -1,5 +1,6 @@
 package com.hkdzagent.agent.memory;
 
+import com.hkdzagent.agent.security.ActorIdentity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -34,6 +35,7 @@ class JdbcChatMemoryTest {
         jdbcTemplate.execute("""
                 CREATE TABLE agent_conversations (
                     id UUID PRIMARY KEY,
+                    owner_key VARCHAR(320) NOT NULL,
                     channel VARCHAR(32) NOT NULL,
                     external_conversation_id VARCHAR(256),
                     title VARCHAR(256),
@@ -108,5 +110,27 @@ class JdbcChatMemoryTest {
 
         assertThat(chatMemory.get("session-empty")).isEmpty();
         assertThat(chatMemory.get("missing-session")).isEmpty();
+    }
+
+    @Test
+    void isolatesSameExternalSessionIdAcrossOwners() {
+        String userAConversation = new OwnedConversationId(
+                ActorIdentity.user("user-a"),
+                "shared-session"
+        ).encode();
+        String userBConversation = new OwnedConversationId(
+                ActorIdentity.user("user-b"),
+                "shared-session"
+        ).encode();
+
+        chatMemory.add(userAConversation, List.of(new UserMessage("private-a")));
+        chatMemory.add(userBConversation, List.of(new UserMessage("private-b")));
+
+        assertThat(chatMemory.get(userAConversation))
+                .extracting(Message::getText)
+                .containsExactly("private-a");
+        assertThat(chatMemory.get(userBConversation))
+                .extracting(Message::getText)
+                .containsExactly("private-b");
     }
 }

@@ -2,7 +2,7 @@
 
 XingClaw Agent is a Spring Boot based AI agent project. It is currently an engineering prototype being upgraded into a production-grade resume project.
 
-The current codebase can compile and pass tests, but it should not yet be described as production-ready. A persistent JWT/RBAC baseline now exists; object ownership, real token-by-token Agent Runtime streaming, approval-gated tool execution, Docker deployment, and observability are still planned work.
+The current codebase can compile and pass tests, but it should not yet be described as production-ready. JWT/RBAC and owner-scoped resource isolation now exist; real token-by-token Agent Runtime streaming, approval-gated tool execution, Docker deployment, and observability are still planned work.
 
 ## Current Status
 
@@ -46,6 +46,7 @@ Spring AI is pinned to the stable 1.1.x line because this project currently stay
 - Feishu webhook endpoint with URL verification, signature verification, durable event inbox option, async retry processing, token provider, and reply client
 - Baseline PostgreSQL, Redis, Docker Compose, and Flyway migration skeleton
 - Optional JWT authentication with JDBC users, BCrypt password hashes, and `USER`/`ADMIN` RBAC
+- Owner-scoped chat memory, Agent traces, and tool-approval lists for Web and Feishu actors
 
 ## Project Structure
 
@@ -361,7 +362,7 @@ Handles Feishu URL verification and `im.message.receive_v1` events. The optional
 
 The following gaps are intentional tracking items for the production-grade upgrade:
 
-- JWT authentication and coarse `USER`/`ADMIN` RBAC exist, but object-level ownership checks are not implemented yet.
+- JWT authentication, `USER`/`ADMIN` RBAC, and owner checks exist for chat memory, traces, and approval lists; organization/tenant isolation is not implemented.
 - Access tokens currently have no refresh, revocation, key rotation, or login rate limiting.
 - PostgreSQL/Redis/Flyway infrastructure exists, and Agent trace/chat memory/tool approvals/Feishu inbox have JDBC repository switches.
 - Agent streaming is not yet true token-by-token runtime streaming.
@@ -379,7 +380,7 @@ The project is being upgraded in staged phases:
 1. Engineering baseline, Git, environment template, README cleanup
 2. Dependency upgrade and configuration fail-fast checks
 3. PostgreSQL, Redis, database migrations, and durable state migration
-4. Authentication, JWT, and RBAC baseline; object-level authorization remains
+4. Authentication, JWT, RBAC, and owner-scoped object authorization baseline
 5. Agent Runtime state machine and real SSE streaming
 6. Tool system, approval workflow, and human-in-the-loop safety
 7. pgvector RAG with hybrid retrieval, citations, and evaluation

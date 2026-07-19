@@ -2,6 +2,8 @@ package com.hkdzagent.agent.functional;
 
 import com.hkdzagent.agent.ai.LLMClient;
 import com.hkdzagent.agent.controller.AgentController;
+import com.hkdzagent.agent.memory.OwnedConversationId;
+import com.hkdzagent.agent.security.ActorIdentity;
 import com.hkdzagent.agent.trace.AgentTraceRecorder;
 import com.hkdzagent.agent.trace.AgentTraceSanitizer;
 import com.hkdzagent.agent.trace.InMemoryAgentTraceRepository;
@@ -48,7 +50,11 @@ class AgentConsoleControllerTest {
 
     @Test
     void streamEndpointEmitsStructuredConsoleEvents() throws Exception {
-        when(llmClient.askWithTools("Get AAPL quote", "console-session"))
+        String conversationId = new OwnedConversationId(
+                ActorIdentity.localAnonymous(),
+                "console-session"
+        ).encode();
+        when(llmClient.askWithTools("Get AAPL quote", conversationId))
                 .thenReturn("AAPL quote summary");
 
         MvcResult pending = mockMvc.perform(post("/api/agent/chat/stream")
@@ -74,7 +80,7 @@ class AgentConsoleControllerTest {
         assertThat(body).contains("\"traceId\"");
         assertThat(body).contains("AAPL quote summary");
 
-        verify(llmClient).askWithTools("Get AAPL quote", "console-session");
+        verify(llmClient).askWithTools("Get AAPL quote", conversationId);
     }
 
     @Test

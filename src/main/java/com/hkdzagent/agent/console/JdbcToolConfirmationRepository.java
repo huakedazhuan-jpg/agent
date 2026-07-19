@@ -33,6 +33,7 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
         jdbcTemplate.update("""
                 INSERT INTO tool_approvals (
                     id,
+                    owner_key,
                     session_id,
                     trace_id,
                     tool_name,
@@ -46,6 +47,7 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
                     created_at
                 ) VALUES (
                     :id,
+                    :ownerKey,
                     :sessionId,
                     :traceId,
                     :toolName,
@@ -66,9 +68,10 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
     }
 
     @Override
-    public List<ToolConfirmation> findPendingBySessionId(String sessionId) {
+    public List<ToolConfirmation> findPendingByOwnerAndSessionId(String ownerKey, String sessionId) {
         return jdbcTemplate.query("""
                 SELECT id,
+                       owner_key,
                        session_id,
                        trace_id,
                        tool_name,
@@ -79,11 +82,14 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
                        expires_at,
                        decided_at
                 FROM tool_approvals
-                WHERE session_id = :sessionId
+                WHERE owner_key = :ownerKey
+                  AND session_id = :sessionId
                   AND status = 'PENDING'
                 ORDER BY created_at ASC, id ASC
                 """,
-                new MapSqlParameterSource("sessionId", sessionId),
+                new MapSqlParameterSource()
+                        .addValue("ownerKey", ownerKey)
+                        .addValue("sessionId", sessionId),
                 this::mapConfirmation);
     }
 
@@ -91,6 +97,7 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
     public ToolConfirmation findById(String confirmationId) {
         List<ToolConfirmation> matches = jdbcTemplate.query("""
                 SELECT id,
+                       owner_key,
                        session_id,
                        trace_id,
                        tool_name,
@@ -151,6 +158,7 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
     private MapSqlParameterSource parameters(ToolConfirmation confirmation) {
         return new MapSqlParameterSource()
                 .addValue("id", UUID.fromString(confirmation.id()))
+                .addValue("ownerKey", confirmation.ownerKey())
                 .addValue("sessionId", confirmation.sessionId())
                 .addValue("traceId", confirmation.traceId())
                 .addValue("toolName", confirmation.toolName())
@@ -165,6 +173,7 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
     private ToolConfirmation mapConfirmation(ResultSet rs, int rowNum) throws SQLException {
         return new ToolConfirmation(
                 rs.getString("id"),
+                rs.getString("owner_key"),
                 rs.getString("session_id"),
                 rs.getString("trace_id"),
                 rs.getString("tool_name"),

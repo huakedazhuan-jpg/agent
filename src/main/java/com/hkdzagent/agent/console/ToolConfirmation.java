@@ -4,6 +4,7 @@ import java.time.Instant;
 
 public record ToolConfirmation(
         String id,
+        String ownerKey,
         String sessionId,
         String traceId,
         String toolName,

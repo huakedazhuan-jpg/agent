@@ -8,6 +8,7 @@ import java.util.List;
 public class AgentTrace {
 
     private final String traceId;
+    private final String ownerKey;
     private final String sessionId;
     private final String userMessage;
     private final Instant startedAt;
@@ -15,12 +16,13 @@ public class AgentTrace {
     private TraceStatus status = TraceStatus.RUNNING;
     private Instant endedAt;
 
-    AgentTrace(String traceId, String sessionId, String userMessage) {
-        this(traceId, sessionId, userMessage, Instant.now(), TraceStatus.RUNNING, null, List.of());
+    AgentTrace(String traceId, String ownerKey, String sessionId, String userMessage) {
+        this(traceId, ownerKey, sessionId, userMessage, Instant.now(), TraceStatus.RUNNING, null, List.of());
     }
 
     AgentTrace(
             String traceId,
+            String ownerKey,
             String sessionId,
             String userMessage,
             Instant startedAt,
@@ -29,6 +31,7 @@ public class AgentTrace {
             List<AgentTraceEvent> events
     ) {
         this.traceId = traceId;
+        this.ownerKey = ownerKey;
         this.sessionId = sessionId;
         this.userMessage = userMessage;
         this.startedAt = startedAt == null ? Instant.now() : startedAt;
@@ -41,6 +44,10 @@ public class AgentTrace {
 
     public String traceId() {
         return traceId;
+    }
+
+    public String ownerKey() {
+        return ownerKey;
     }
 
     public String sessionId() {
@@ -85,6 +92,7 @@ public class AgentTrace {
     public synchronized String toString() {
         return "AgentTrace{" +
                 "traceId='" + traceId + '\'' +
+                ", ownerKey='" + ownerKey + '\'' +
                 ", sessionId='" + sessionId + '\'' +
                 ", userMessage='" + userMessage + '\'' +
                 ", status=" + status +

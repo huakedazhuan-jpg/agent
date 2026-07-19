@@ -1,5 +1,7 @@
 package com.hkdzagent.agent.trace;
 
+import com.hkdzagent.agent.security.ActorIdentity;
+
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -15,7 +17,21 @@ public class AgentTraceRecorder {
     }
 
     public AgentTrace startTrace(String traceId, String sessionId, String userMessage) {
-        return repository.save(new AgentTrace(traceId, sessionId, sanitizer.preview(userMessage)));
+        return startTrace(ActorIdentity.localAnonymous(), traceId, sessionId, userMessage);
+    }
+
+    public AgentTrace startTrace(
+            ActorIdentity owner,
+            String traceId,
+            String sessionId,
+            String userMessage
+    ) {
+        return repository.save(new AgentTrace(
+                traceId,
+                owner.key(),
+                sessionId,
+                sanitizer.preview(userMessage)
+        ));
     }
 
     public void recordModelRequest(String traceId, int step, Map<String, Object> metadata) {

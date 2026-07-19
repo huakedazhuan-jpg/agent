@@ -56,6 +56,7 @@ The migrations create durable-state tables for:
 - tool approvals
 - Feishu event inbox
 - application users, roles, and user-role assignments
+- owner keys and owner-scoped indexes for conversations, traces, and tool approvals
 
 Agent trace can now use PostgreSQL:
 
@@ -90,6 +91,8 @@ FEISHU_INBOX_POLL_BATCH_SIZE=20
 ```
 
 The inbox stores each event before asynchronous processing, deduplicates by event ID, atomically claims work, retries transient failures, recovers stale processing leases, and moves exhausted events to `DEAD` for inspection.
+
+Migration V7 scopes runtime data by Actor. Web users use `user:<JWT subject>`, Feishu conversations use `feishu:<openId>`, and legacy records are marked `legacy:unowned`. Conversation uniqueness is owner-scoped so identical external session IDs from different users do not collide.
 
 The processing guarantee is at-least-once, not strict exactly-once. If an external Feishu reply succeeds and the process stops before the inbox row is marked `PROCESSED`, lease recovery can repeat the reply. Removing that final ambiguity requires an idempotency guarantee from the external send operation or a separate transactional outbox/send-receipt design.
 

@@ -172,6 +172,28 @@ class InfrastructureConfigurationTest {
     }
 
     @Test
+    void seventhFlywayMigrationAddsResourceOwnershipAndOwnerScopedConversationUniqueness() throws IOException {
+        Path migration = PROJECT_ROOT.resolve(
+                "src/main/resources/db/migration/postgresql/V7__resource_ownership.sql"
+        );
+        String sql = Files.readString(migration);
+
+        assertThat(sql).contains(
+                "ALTER TABLE agent_conversations",
+                "ALTER TABLE agent_traces",
+                "ALTER TABLE tool_approvals",
+                "ADD COLUMN owner_key VARCHAR(320)",
+                "SET owner_key = 'legacy:unowned'",
+                "ALTER COLUMN owner_key SET NOT NULL",
+                "DROP INDEX ux_agent_conversations_channel_external_id",
+                "CREATE UNIQUE INDEX ux_agent_conversations_owner_channel_external_id",
+                "ON agent_conversations (owner_key, channel, external_conversation_id)",
+                "CREATE INDEX ix_agent_traces_owner_started_at",
+                "CREATE INDEX ix_tool_approvals_owner_session_status_created_at"
+        );
+    }
+
+    @Test
     void environmentTemplateDocumentsInfrastructureSettings() throws IOException {
         String envExample = Files.readString(PROJECT_ROOT.resolve(".env.example"));
 

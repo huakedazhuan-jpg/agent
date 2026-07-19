@@ -8,6 +8,8 @@ import com.hkdzagent.agent.im.FeishuInboxConfig;
 import com.hkdzagent.agent.im.FeishuReplyClient;
 import com.hkdzagent.agent.im.FeishuSignatureVerifier;
 import com.hkdzagent.agent.im.FeishuWebhookController;
+import com.hkdzagent.agent.memory.OwnedConversationId;
+import com.hkdzagent.agent.security.ActorIdentity;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -86,7 +88,7 @@ class AgentFeishuWebhookFunctionalTest {
 
     @Test
     void ignoresDuplicateMessageEvents() throws Exception {
-        when(llmClient.askWithTools("hello", "open_1")).thenReturn("answer");
+        when(llmClient.askWithTools("hello", conversationId("open_1"))).thenReturn("answer");
         String payload = messageEvent("event-duplicate", "message-duplicate", "hello");
 
         mockMvc.perform(post("/api/feishu/webhook")
@@ -101,13 +103,14 @@ class AgentFeishuWebhookFunctionalTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0));
 
-        verify(llmClient, timeout(1000).times(1)).askWithTools("hello", "open_1");
+        verify(llmClient, timeout(1000).times(1)).askWithTools("hello", conversationId("open_1"));
         verify(feishuReplyClient, timeout(1000).times(1)).replyText("open_1", "answer");
     }
 
     @Test
     void sendsUserSafeErrorReplyWhenAgentProcessingFails() throws Exception {
-        when(llmClient.askWithTools("hello", "open_1")).thenThrow(new IllegalStateException("model exploded"));
+        when(llmClient.askWithTools("hello", conversationId("open_1")))
+                .thenThrow(new IllegalStateException("model exploded"));
 
         mockMvc.perform(post("/api/feishu/webhook")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -142,5 +145,9 @@ class AgentFeishuWebhookFunctionalTest {
                   }
                 }
                 """.formatted(eventId, messageId, text);
+    }
+
+    private String conversationId(String openId) {
+        return new OwnedConversationId(ActorIdentity.feishu(openId), openId).encode();
     }
 }

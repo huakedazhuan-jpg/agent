@@ -3,6 +3,8 @@ package com.hkdzagent.agent.im;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hkdzagent.agent.ai.LLMClient;
+import com.hkdzagent.agent.memory.OwnedConversationId;
+import com.hkdzagent.agent.security.ActorIdentity;
 import com.hkdzagent.agent.trace.AgentTraceSanitizer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -87,7 +89,8 @@ public class FeishuEventProcessor {
             JsonNode contentNode = objectMapper.readTree(contentStr);
             String userText = contentNode.path("text").asText();
 
-            String answer = llmClient.askWithTools(userText, openId);
+            String conversationId = new OwnedConversationId(ActorIdentity.feishu(openId), openId).encode();
+            String answer = llmClient.askWithTools(userText, conversationId);
             feishuReplyClient.replyText(openId, answer);
             inboxRepository.markProcessed(eventId, clock.instant());
         } catch (Exception e) {

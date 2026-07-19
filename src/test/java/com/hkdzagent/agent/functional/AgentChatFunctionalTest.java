@@ -2,6 +2,8 @@ package com.hkdzagent.agent.functional;
 
 import com.hkdzagent.agent.ai.LLMClient;
 import com.hkdzagent.agent.controller.AgentController;
+import com.hkdzagent.agent.memory.OwnedConversationId;
+import com.hkdzagent.agent.security.ActorIdentity;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -28,7 +30,11 @@ class AgentChatFunctionalTest {
 
     @Test
     void chatEndpointReturnsAgentAnswerAndPassesSessionIdToLlmClient() throws Exception {
-        when(llmClient.askWithTools("Get AAPL quote", "functional-session"))
+        String conversationId = new OwnedConversationId(
+                ActorIdentity.localAnonymous(),
+                "functional-session"
+        ).encode();
+        when(llmClient.askWithTools("Get AAPL quote", conversationId))
                 .thenReturn("AAPL quote summary");
 
         mockMvc.perform(post("/api/agent/chat")
@@ -42,6 +48,6 @@ class AgentChatFunctionalTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.answer").value("AAPL quote summary"));
 
-        verify(llmClient).askWithTools("Get AAPL quote", "functional-session");
+        verify(llmClient).askWithTools("Get AAPL quote", conversationId);
     }
 }

@@ -7,6 +7,9 @@ import com.hkdzagent.agent.console.ToolConfirmation;
 import com.hkdzagent.agent.console.ToolConfirmationService;
 import com.hkdzagent.agent.model.ChatRequest;
 import com.hkdzagent.agent.model.ChatResponse;
+import com.hkdzagent.agent.memory.OwnedConversationId;
+import com.hkdzagent.agent.security.ActorIdentity;
+import com.hkdzagent.agent.security.RequestActorResolver;
 import com.hkdzagent.agent.trace.AgentTrace;
 import com.hkdzagent.agent.trace.AgentTraceEvent;
 import com.hkdzagent.agent.trace.AgentTraceRecorder;
@@ -16,6 +19,7 @@ import com.hkdzagent.agent.trace.InMemoryAgentTraceRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -36,6 +40,7 @@ public class AgentController {
 
     private final LLMClient llmClient;
     private final AgentTraceSanitizer fallbackSanitizer = new AgentTraceSanitizer(120);
+    private RequestActorResolver actorResolver = new RequestActorResolver();
     private ObjectMapper objectMapper = new ObjectMapper();
     private AgentTraceRepository traceRepository = new InMemoryAgentTraceRepository();
     private AgentTraceRecorder traceRecorder = new AgentTraceRecorder(traceRepository, fallbackSanitizer);
@@ -46,25 +51,30 @@ public class AgentController {
     }
 
     @PostMapping("/api/agent/chat")
-    public ChatResponse chat(@RequestBody ChatRequest request) {
-        String answer = llmClient.askWithTools(request.message(), request.sessionId());
+    public ChatResponse chat(@RequestBody ChatRequest request, Authentication authentication) {
+        ActorIdentity owner = actorResolver.resolve(authentication);
+        String sessionId = normalizeSessionId(request.sessionId());
+        String answer = llmClient.askWithTools(request.message(), ownedConversationId(owner, sessionId));
         return new ChatResponse(answer);
     }
 
     @PostMapping(value = "/api/agent/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<String> chatStream(@RequestBody ChatRequest request) {
+    public Flux<String> chatStream(@RequestBody ChatRequest request, Authentication authentication) {
         String traceId = UUID.randomUUID().toString();
+        ActorIdentity owner = actorResolver.resolve(authentication);
         String sessionId = normalizeSessionId(request.sessionId());
+        String conversationId = ownedConversationId(owner, sessionId);
         String message = request.message() == null ? "" : request.message();
-        traceRecorder.startTrace(traceId, sessionId, message);
+        traceRecorder.startTrace(owner, traceId, sessionId, message);
 
-        return Flux.defer(() -> runAgentStream(traceId, sessionId, message))
+        return Flux.defer(() -> runAgentStream(traceId, sessionId, conversationId, message))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
     @GetMapping("/api/agent/traces/{traceId}")
-    public ResponseEntity<AgentTraceView> trace(@PathVariable String traceId) {
-        AgentTrace trace = traceRepository.findByTraceId(traceId);
+    public ResponseEntity<AgentTraceView> trace(@PathVariable String traceId, Authentication authentication) {
+        ActorIdentity owner = actorResolver.resolve(authentication);
+        AgentTrace trace = traceRepository.findByTraceIdAndOwner(traceId, owner.key());
         if (trace == null) {
             return ResponseEntity.notFound().build();
         }
@@ -72,16 +82,24 @@ public class AgentController {
     }
 
     @GetMapping("/api/agent/traces")
-    public List<AgentTraceView> recentTraces(@RequestParam(defaultValue = "20") int limit) {
+    public List<AgentTraceView> recentTraces(
+            @RequestParam(defaultValue = "20") int limit,
+            Authentication authentication
+    ) {
         int safeLimit = Math.max(1, Math.min(limit, 50));
-        return traceRepository.findRecent(safeLimit).stream()
+        ActorIdentity owner = actorResolver.resolve(authentication);
+        return traceRepository.findRecentByOwner(owner.key(), safeLimit).stream()
                 .map(AgentTraceView::from)
                 .toList();
     }
 
     @GetMapping("/api/agent/tool-confirmations")
-    public List<ToolConfirmation> pendingConfirmations(@RequestParam(defaultValue = "default") String sessionId) {
-        return confirmationService.findPendingBySessionId(sessionId);
+    public List<ToolConfirmation> pendingConfirmations(
+            @RequestParam(defaultValue = "default") String sessionId,
+            Authentication authentication
+    ) {
+        ActorIdentity owner = actorResolver.resolve(authentication);
+        return confirmationService.findPendingBySessionId(owner, sessionId);
     }
 
     @PostMapping("/api/agent/tool-confirmations/{confirmationId}/approve")
@@ -118,13 +136,23 @@ public class AgentController {
         this.confirmationService = confirmationService;
     }
 
-    private Flux<String> runAgentStream(String traceId, String sessionId, String message) {
+    @Autowired(required = false)
+    void setActorResolver(RequestActorResolver actorResolver) {
+        this.actorResolver = actorResolver;
+    }
+
+    private Flux<String> runAgentStream(
+            String traceId,
+            String sessionId,
+            String conversationId,
+            String message
+    ) {
         LinkedHashMap<String, Object> started = payload(traceId, sessionId);
         started.put("status", "RUNNING");
 
         try {
             long startedNanos = System.nanoTime();
-            String answer = llmClient.askWithTools(message, sessionId);
+            String answer = llmClient.askWithTools(message, conversationId);
             Duration duration = Duration.ofNanos(System.nanoTime() - startedNanos);
             traceRecorder.recordFinalAnswer(traceId, answer);
             traceRecorder.finishTrace(traceId, "COMPLETED");
@@ -181,6 +209,10 @@ public class AgentController {
             return "default";
         }
         return sessionId;
+    }
+
+    private String ownedConversationId(ActorIdentity owner, String sessionId) {
+        return new OwnedConversationId(owner, sessionId).encode();
     }
 
     private record AgentTraceView(

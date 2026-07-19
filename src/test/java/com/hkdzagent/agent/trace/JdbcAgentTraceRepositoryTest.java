@@ -31,6 +31,7 @@ class JdbcAgentTraceRepositoryTest {
         jdbcTemplate.execute("""
                 CREATE TABLE agent_traces (
                     trace_id VARCHAR(128) PRIMARY KEY,
+                    owner_key VARCHAR(320) NOT NULL,
                     session_id VARCHAR(256) NOT NULL,
                     user_message CLOB NOT NULL,
                     status VARCHAR(32) NOT NULL,
@@ -80,6 +81,7 @@ class JdbcAgentTraceRepositoryTest {
 
         assertThat(stored).isNotNull();
         assertThat(stored.traceId()).isEqualTo("trace-jdbc");
+        assertThat(stored.ownerKey()).isEqualTo("local:anonymous");
         assertThat(stored.sessionId()).isEqualTo("session-jdbc");
         assertThat(stored.status()).isEqualTo(TraceStatus.COMPLETED);
         assertThat(stored.endedAt()).isNotNull();
@@ -98,6 +100,7 @@ class JdbcAgentTraceRepositoryTest {
     void findRecentReturnsNewestTracesFirst() {
         repository.save(new AgentTrace(
                 "trace-old",
+                "local:anonymous",
                 "session-1",
                 "old",
                 Instant.parse("2026-01-01T00:00:00Z"),
@@ -107,6 +110,7 @@ class JdbcAgentTraceRepositoryTest {
         ));
         repository.save(new AgentTrace(
                 "trace-new",
+                "local:anonymous",
                 "session-1",
                 "new",
                 Instant.parse("2026-01-01T00:00:01Z"),
@@ -138,5 +142,28 @@ class JdbcAgentTraceRepositoryTest {
         ));
 
         assertThat(repository.findByTraceId("missing-trace")).isNull();
+    }
+
+    @Test
+    void ownerScopedQueriesDoNotReturnAnotherUsersTraces() {
+        AgentTraceRecorder recorder = new AgentTraceRecorder(repository, new AgentTraceSanitizer(80));
+        recorder.startTrace(
+                com.hkdzagent.agent.security.ActorIdentity.user("user-a"),
+                "trace-user-a",
+                "shared-session",
+                "private-a"
+        );
+        recorder.startTrace(
+                com.hkdzagent.agent.security.ActorIdentity.user("user-b"),
+                "trace-user-b",
+                "shared-session",
+                "private-b"
+        );
+
+        assertThat(repository.findByTraceIdAndOwner("trace-user-a", "user:user-a")).isNotNull();
+        assertThat(repository.findByTraceIdAndOwner("trace-user-a", "user:user-b")).isNull();
+        assertThat(repository.findRecentByOwner("user:user-b", 10))
+                .extracting(AgentTrace::traceId)
+                .containsExactly("trace-user-b");
     }
 }

@@ -29,6 +29,7 @@ class JdbcToolConfirmationRepositoryTest {
         jdbcTemplate.execute("""
                 CREATE TABLE tool_approvals (
                     id UUID PRIMARY KEY,
+                    owner_key VARCHAR(320) NOT NULL,
                     session_id VARCHAR(256) NOT NULL,
                     trace_id VARCHAR(128),
                     tool_name VARCHAR(128) NOT NULL,
@@ -61,7 +62,7 @@ class JdbcToolConfirmationRepositoryTest {
         );
 
         assertThat(reloadedRepository.findById(pending.id())).isEqualTo(pending);
-        assertThat(reloadedRepository.findPendingBySessionId("session-jdbc"))
+        assertThat(reloadedRepository.findPendingByOwnerAndSessionId("user:test", "session-jdbc"))
                 .containsExactly(pending);
     }
 
@@ -116,12 +117,45 @@ class JdbcToolConfirmationRepositoryTest {
         assertThat(lateDecision).isNull();
         assertThat(repository.findById(pending.id()).status())
                 .isEqualTo(ToolConfirmation.Status.EXPIRED);
-        assertThat(repository.findPendingBySessionId("session-expired")).isEmpty();
+        assertThat(repository.findPendingByOwnerAndSessionId("user:test", "session-expired")).isEmpty();
+    }
+
+    @Test
+    void pendingQueriesIsolateSameSessionAcrossOwners() {
+        ToolConfirmation userA = confirmation(
+                "user:a",
+                "shared-session",
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:15:00Z")
+        );
+        ToolConfirmation userB = confirmation(
+                "user:b",
+                "shared-session",
+                Instant.parse("2026-01-01T00:00:01Z"),
+                Instant.parse("2026-01-01T00:15:01Z")
+        );
+        repository.save(userA);
+        repository.save(userB);
+
+        assertThat(repository.findPendingByOwnerAndSessionId("user:a", "shared-session"))
+                .containsExactly(userA);
+        assertThat(repository.findPendingByOwnerAndSessionId("user:b", "shared-session"))
+                .containsExactly(userB);
     }
 
     private ToolConfirmation confirmation(String sessionId, Instant createdAt, Instant expiresAt) {
+        return confirmation("user:test", sessionId, createdAt, expiresAt);
+    }
+
+    private ToolConfirmation confirmation(
+            String ownerKey,
+            String sessionId,
+            Instant createdAt,
+            Instant expiresAt
+    ) {
         return new ToolConfirmation(
                 UUID.randomUUID().toString(),
+                ownerKey,
                 sessionId,
                 "trace-jdbc",
                 "commandExecuteTool",

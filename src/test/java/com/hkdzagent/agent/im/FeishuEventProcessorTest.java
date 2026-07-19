@@ -2,6 +2,8 @@ package com.hkdzagent.agent.im;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hkdzagent.agent.ai.LLMClient;
+import com.hkdzagent.agent.memory.OwnedConversationId;
+import com.hkdzagent.agent.security.ActorIdentity;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
@@ -28,7 +30,7 @@ class FeishuEventProcessorTest {
         MutableClock clock = new MutableClock(Instant.parse("2026-01-01T00:00:00Z"));
         LLMClient llmClient = mock(LLMClient.class);
         FeishuReplyClient replyClient = mock(FeishuReplyClient.class);
-        when(llmClient.askWithTools("hello", "open-1")).thenReturn("answer");
+        when(llmClient.askWithTools("hello", conversationId("open-1"))).thenReturn("answer");
         repository.receive(event("event-success", clock.instant()));
 
         processor(repository, clock, llmClient, replyClient, Runnable::run, 3)
@@ -47,7 +49,7 @@ class FeishuEventProcessorTest {
         MutableClock clock = new MutableClock(Instant.parse("2026-01-01T00:00:00Z"));
         LLMClient llmClient = mock(LLMClient.class);
         FeishuReplyClient replyClient = mock(FeishuReplyClient.class);
-        when(llmClient.askWithTools("hello", "open-1"))
+        when(llmClient.askWithTools("hello", conversationId("open-1")))
                 .thenThrow(new IllegalStateException("api_key=secret-value model unavailable"));
         repository.receive(event("event-failure", clock.instant()));
         FeishuEventProcessor processor = processor(
@@ -66,7 +68,7 @@ class FeishuEventProcessorTest {
 
         assertThat(repository.findById("event-failure").status())
                 .isEqualTo(FeishuInboxEvent.Status.DEAD);
-        verify(llmClient, times(2)).askWithTools("hello", "open-1");
+        verify(llmClient, times(2)).askWithTools("hello", conversationId("open-1"));
         verify(replyClient).replyText(org.mockito.ArgumentMatchers.eq("open-1"), anyString());
     }
 
@@ -138,6 +140,10 @@ class FeishuEventProcessorTest {
                 0,
                 null
         );
+    }
+
+    private String conversationId(String openId) {
+        return new OwnedConversationId(ActorIdentity.feishu(openId), openId).encode();
     }
 
     private static final class MutableClock extends Clock {
