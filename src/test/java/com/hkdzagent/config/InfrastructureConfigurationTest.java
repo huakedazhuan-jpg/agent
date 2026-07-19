@@ -122,6 +122,23 @@ class InfrastructureConfigurationTest {
     }
 
     @Test
+    void fourthFlywayMigrationAddsDurableToolApprovalFields() throws IOException {
+        Path migration = PROJECT_ROOT.resolve(
+                "src/main/resources/db/migration/postgresql/V4__durable_tool_approvals.sql"
+        );
+        String sql = Files.readString(migration);
+
+        assertThat(sql).contains(
+                "ALTER TABLE tool_approvals",
+                "ADD COLUMN session_id VARCHAR(256)",
+                "ADD COLUMN trace_id VARCHAR(128)",
+                "ADD COLUMN arguments_preview TEXT",
+                "ADD COLUMN decision_reason TEXT",
+                "CREATE INDEX ix_tool_approvals_session_status_created_at"
+        );
+    }
+
+    @Test
     void environmentTemplateDocumentsInfrastructureSettings() throws IOException {
         String envExample = Files.readString(PROJECT_ROOT.resolve(".env.example"));
 
@@ -133,6 +150,8 @@ class InfrastructureConfigurationTest {
                 "REDIS_PASSWORD=xingclaw-local-redis",
                 "SPRING_FLYWAY_ENABLED=false",
                 "AGENT_TRACE_REPOSITORY=memory",
+                "AGENT_TOOL_APPROVAL_REPOSITORY=memory",
+                "AGENT_TOOL_APPROVAL_TTL=15m",
                 "AGENT_MEMORY_REPOSITORY=file"
         );
     }
@@ -147,6 +166,7 @@ class InfrastructureConfigurationTest {
                 "Flyway is present but disabled by default",
                 "Agent trace can now use PostgreSQL",
                 "Chat memory can now use PostgreSQL",
+                "Tool approvals can now use PostgreSQL",
                 "Production must provide explicit database and Redis credentials"
         );
     }

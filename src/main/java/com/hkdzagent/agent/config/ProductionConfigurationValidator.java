@@ -62,6 +62,10 @@ public class ProductionConfigurationValidator implements InitializingBean {
             unsafeProperties.add("agent.memory.repository must be jdbc in prod");
         }
 
+        if (!jdbcToolApprovalRepositoryEnabled()) {
+            unsafeProperties.add("agent.tool-approval.repository must be jdbc in prod");
+        }
+
         if (!unsafeProperties.isEmpty()) {
             throw new IllegalStateException("Unsafe production configuration: " + String.join(", ", unsafeProperties));
         }
@@ -111,6 +115,11 @@ public class ProductionConfigurationValidator implements InitializingBean {
 
     private boolean jdbcChatMemoryEnabled() {
         String repository = environment.getProperty("agent.memory.repository", "");
+        return "jdbc".equalsIgnoreCase(repository.trim());
+    }
+
+    private boolean jdbcToolApprovalRepositoryEnabled() {
+        String repository = environment.getProperty("agent.tool-approval.repository", "");
         return "jdbc".equalsIgnoreCase(repository.trim());
     }
 }

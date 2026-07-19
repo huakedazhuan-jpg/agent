@@ -2,7 +2,7 @@
 
 XingClaw Agent is a Spring Boot based AI agent project. It is currently an engineering prototype being upgraded into a production-grade resume project.
 
-The current codebase can compile and pass tests, but it should not yet be described as production-ready. Important production capabilities such as persistent multi-user identity, PostgreSQL/Redis state, real token-by-token Agent Runtime streaming, durable tool approval, CI, Docker deployment, and observability are still planned work.
+The current codebase can compile and pass tests, but it should not yet be described as production-ready. Important production capabilities such as persistent multi-user identity, real token-by-token Agent Runtime streaming, approval-gated tool execution, Docker deployment, and observability are still planned work.
 
 ## Current Status
 
@@ -33,7 +33,7 @@ Spring AI is pinned to the stable 1.1.x line because this project currently stay
 - Console SSE endpoint at `/api/agent/chat/stream`
   - Current limitation: it emits lifecycle events and the final answer, but does not yet implement true token-by-token Agent Runtime streaming.
 - Agent trace with in-memory local adapter and optional PostgreSQL JDBC repository
-- Tool confirmation queue prototype
+- Tool confirmation queue with in-memory local adapter and optional PostgreSQL JDBC repository, expiry, and atomic decisions
 - Chat memory with JSONL local adapter and optional PostgreSQL JDBC repository
 - Tool registry with safety checks:
   - write a file inside the configured workspace
@@ -135,6 +135,8 @@ REDIS_TIMEOUT=2s
 SPRING_FLYWAY_ENABLED=false
 
 AGENT_TRACE_REPOSITORY=memory
+AGENT_TOOL_APPROVAL_REPOSITORY=memory
+AGENT_TOOL_APPROVAL_TTL=15m
 AGENT_MEMORY_REPOSITORY=file
 AGENT_MEMORY_FILE=data/chat-memory.jsonl
 AGENT_RAG_INDEX_FILE=data/rag-index.json
@@ -174,7 +176,13 @@ To store chat memory in PostgreSQL instead of the local JSONL file, set:
 $env:AGENT_MEMORY_REPOSITORY = "jdbc"
 ```
 
-The defaults remain `AGENT_TRACE_REPOSITORY=memory` and `AGENT_MEMORY_REPOSITORY=file` for fast local tests and development startup. The `prod` profile rejects these defaults and requires both repositories to use `jdbc`.
+To store tool approvals in PostgreSQL with multi-instance-safe decisions, set:
+
+```powershell
+$env:AGENT_TOOL_APPROVAL_REPOSITORY = "jdbc"
+```
+
+The defaults remain `AGENT_TRACE_REPOSITORY=memory`, `AGENT_MEMORY_REPOSITORY=file`, and `AGENT_TOOL_APPROVAL_REPOSITORY=memory` for fast local tests and development startup. The `prod` profile rejects these defaults and requires all three repositories to use `jdbc`.
 
 See `docs/infrastructure.md` for the current infrastructure boundary.
 
@@ -293,7 +301,7 @@ POST /api/agent/tool-confirmations/{confirmationId}/approve
 POST /api/agent/tool-confirmations/{confirmationId}/reject
 ```
 
-Current limitation: the confirmation service exists as a console prototype and is not yet a durable production approval workflow.
+Approval records can be persisted in PostgreSQL, expire after a configurable TTL, and use atomic pending-state decisions. Current limitation: tool execution is not yet paused and resumed by this approval state, so the end-to-end human-in-the-loop workflow is not complete.
 
 ### Feishu Webhook
 
@@ -308,9 +316,9 @@ Handles Feishu URL verification and `im.message.receive_v1` events.
 The following gaps are intentional tracking items for the production-grade upgrade:
 
 - No multi-user authentication or object-level authorization yet.
-- PostgreSQL/Redis/Flyway infrastructure exists, and Agent trace/chat memory have JDBC repository switches. Tool approvals and Feishu inbox still need durable runtime wiring.
+- PostgreSQL/Redis/Flyway infrastructure exists, and Agent trace/chat memory/tool approvals have JDBC repository switches. Feishu inbox still needs durable runtime wiring.
 - Agent streaming is not yet true token-by-token runtime streaming.
-- Tool confirmation is not yet a durable production approval workflow.
+- Tool approval persistence is durable, but approval is not yet connected to pause/resume tool execution.
 - RAG is still local/file-backed, not pgvector hybrid retrieval.
 - Feishu event handling is not yet backed by a persistent inbox/dead-letter table.
 - No production Docker Compose stack yet.

@@ -11,41 +11,14 @@ public record ToolConfirmation(
         Status status,
         String decisionReason,
         Instant createdAt,
+        Instant expiresAt,
         Instant decidedAt
 ) {
 
     public enum Status {
         PENDING,
         APPROVED,
-        REJECTED
-    }
-
-    public ToolConfirmation approve() {
-        return new ToolConfirmation(
-                id,
-                sessionId,
-                traceId,
-                toolName,
-                argumentsPreview,
-                Status.APPROVED,
-                "approved",
-                createdAt,
-                Instant.now()
-        );
-    }
-
-    public ToolConfirmation reject(String reason) {
-        String normalizedReason = reason == null || reason.isBlank() ? "rejected" : reason;
-        return new ToolConfirmation(
-                id,
-                sessionId,
-                traceId,
-                toolName,
-                argumentsPreview,
-                Status.REJECTED,
-                normalizedReason,
-                createdAt,
-                Instant.now()
-        );
+        REJECTED,
+        EXPIRED
     }
 }

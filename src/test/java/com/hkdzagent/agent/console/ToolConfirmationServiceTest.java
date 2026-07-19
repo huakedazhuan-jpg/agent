@@ -7,6 +7,7 @@ import java.lang.reflect.Method;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.fail;
 
 class ToolConfirmationServiceTest {
@@ -29,6 +30,7 @@ class ToolConfirmationServiceTest {
         assertThat(invoke(pending, "traceId")).isEqualTo("trace-confirm");
         assertThat(invoke(pending, "toolName")).isEqualTo("commandExecuteTool");
         assertThat(invoke(pending, "status").toString()).isEqualTo("PENDING");
+        assertThat(invoke(pending, "expiresAt")).isNotNull();
 
         List<?> pendingItems = (List<?>) invoke(service, "findPendingBySessionId", "console-session");
         assertThat(pendingItems).hasSize(1);
@@ -37,6 +39,10 @@ class ToolConfirmationServiceTest {
         Object approved = invoke(service, "approve", confirmationId);
         assertThat(invoke(approved, "status").toString()).isEqualTo("APPROVED");
         assertThat((List<?>) invoke(service, "findPendingBySessionId", "console-session")).isEmpty();
+
+        assertThatThrownBy(() -> invoke(service, "reject", confirmationId, "late rejection"))
+                .hasCauseInstanceOf(IllegalStateException.class)
+                .hasRootCauseMessage("confirmation is no longer pending: " + confirmationId + " (APPROVED)");
     }
 
     @Test

@@ -1,36 +1,61 @@
 package com.hkdzagent.agent.console;
 
 import com.hkdzagent.agent.trace.AgentTraceSanitizer;
-import org.springframework.stereotype.Service;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
-@Service
 public class ToolConfirmationService {
 
-    private final Map<String, ToolConfirmation> confirmations = new LinkedHashMap<>();
+    private final ToolConfirmationRepository repository;
     private final AgentTraceSanitizer sanitizer;
+    private final Duration ttl;
+    private final Clock clock;
 
     public ToolConfirmationService() {
-        this(new AgentTraceSanitizer(120));
+        this(
+                new InMemoryToolConfirmationRepository(),
+                new AgentTraceSanitizer(120),
+                Duration.ofMinutes(15),
+                Clock.systemUTC()
+        );
     }
 
     public ToolConfirmationService(AgentTraceSanitizer sanitizer) {
-        this.sanitizer = sanitizer;
+        this(
+                new InMemoryToolConfirmationRepository(),
+                sanitizer,
+                Duration.ofMinutes(15),
+                Clock.systemUTC()
+        );
     }
 
-    public synchronized ToolConfirmation requestConfirmation(
+    public ToolConfirmationService(
+            ToolConfirmationRepository repository,
+            AgentTraceSanitizer sanitizer,
+            Duration ttl,
+            Clock clock
+    ) {
+        this.repository = repository;
+        this.sanitizer = sanitizer;
+        if (ttl == null || ttl.isZero() || ttl.isNegative()) {
+            throw new IllegalArgumentException("tool approval ttl must be positive");
+        }
+        this.ttl = ttl;
+        this.clock = clock;
+    }
+
+    public ToolConfirmation requestConfirmation(
             String sessionId,
             String traceId,
             String toolName,
             String arguments
     ) {
-        ToolConfirmation confirmation = new ToolConfirmation(
+        Instant createdAt = clock.instant();
+        return repository.save(new ToolConfirmation(
                 UUID.randomUUID().toString(),
                 normalize(sessionId),
                 traceId,
@@ -38,47 +63,49 @@ public class ToolConfirmationService {
                 sanitizer.preview(arguments),
                 ToolConfirmation.Status.PENDING,
                 null,
-                Instant.now(),
+                createdAt,
+                createdAt.plus(ttl),
                 null
-        );
-        confirmations.put(confirmation.id(), confirmation);
-        return confirmation;
+        ));
     }
 
-    public synchronized List<ToolConfirmation> findPendingBySessionId(String sessionId) {
-        String normalizedSessionId = normalize(sessionId);
-        List<ToolConfirmation> pending = new ArrayList<>();
-        for (ToolConfirmation confirmation : confirmations.values()) {
-            if (confirmation.status() == ToolConfirmation.Status.PENDING
-                    && confirmation.sessionId().equals(normalizedSessionId)) {
-                pending.add(confirmation);
-            }
+    public List<ToolConfirmation> findPendingBySessionId(String sessionId) {
+        repository.expirePendingBefore(clock.instant());
+        return repository.findPendingBySessionId(normalize(sessionId));
+    }
+
+    public ToolConfirmation findById(String confirmationId) {
+        repository.expirePendingBefore(clock.instant());
+        return repository.findById(confirmationId);
+    }
+
+    public ToolConfirmation approve(String confirmationId) {
+        return decide(confirmationId, ToolConfirmation.Status.APPROVED, "approved");
+    }
+
+    public ToolConfirmation reject(String confirmationId, String reason) {
+        String normalizedReason = reason == null || reason.isBlank() ? "rejected" : reason;
+        return decide(confirmationId, ToolConfirmation.Status.REJECTED, normalizedReason);
+    }
+
+    private ToolConfirmation decide(
+            String confirmationId,
+            ToolConfirmation.Status status,
+            String decisionReason
+    ) {
+        Instant now = clock.instant();
+        repository.expirePendingBefore(now);
+        ToolConfirmation decided = repository.decidePending(confirmationId, status, decisionReason, now);
+        if (decided != null) {
+            return decided;
         }
-        return List.copyOf(pending);
-    }
-
-    public synchronized ToolConfirmation findById(String confirmationId) {
-        return confirmations.get(confirmationId);
-    }
-
-    public synchronized ToolConfirmation approve(String confirmationId) {
-        ToolConfirmation confirmation = requireConfirmation(confirmationId).approve();
-        confirmations.put(confirmation.id(), confirmation);
-        return confirmation;
-    }
-
-    public synchronized ToolConfirmation reject(String confirmationId, String reason) {
-        ToolConfirmation confirmation = requireConfirmation(confirmationId).reject(reason);
-        confirmations.put(confirmation.id(), confirmation);
-        return confirmation;
-    }
-
-    private ToolConfirmation requireConfirmation(String confirmationId) {
-        ToolConfirmation confirmation = confirmations.get(confirmationId);
+        ToolConfirmation confirmation = repository.findById(confirmationId);
         if (confirmation == null) {
             throw new IllegalArgumentException("confirmation not found: " + confirmationId);
         }
-        return confirmation;
+        throw new IllegalStateException(
+                "confirmation is no longer pending: " + confirmationId + " (" + confirmation.status() + ")"
+        );
     }
 
     private String normalize(String sessionId) {

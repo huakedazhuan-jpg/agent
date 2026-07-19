@@ -4,6 +4,7 @@ import com.hkdzagent.agent.AgentApplication;
 import com.hkdzagent.agent.ai.ChatMemoryProperties;
 import com.hkdzagent.agent.ai.KimiProperties;
 import com.hkdzagent.agent.ai.OpenAiCompatibleProperties;
+import com.hkdzagent.agent.console.ToolConfirmationProperties;
 import com.hkdzagent.agent.im.FeishuProperties;
 import com.hkdzagent.agent.rag.RagProperties;
 import com.hkdzagent.agent.tool.TavilyProperties;
@@ -61,6 +62,8 @@ class ApplicationPropertiesBindingTest {
                 .withProperty("agent.memory.repository", "jdbc")
                 .withProperty("agent.rag.index-file", "data/test-rag-index.json")
                 .withProperty("agent.trace.repository", "jdbc")
+                .withProperty("agent.tool-approval.repository", "jdbc")
+                .withProperty("agent.tool-approval.ttl", "10m")
                 .withProperty("tavily.api-key", "tavily-api-key")
                 .withProperty("feishu.app-id", "feishu-app-id")
                 .withProperty("feishu.app-secret", "feishu-app-secret")
@@ -73,6 +76,11 @@ class ApplicationPropertiesBindingTest {
         ChatMemoryProperties memory = bind(environment, "agent.memory", ChatMemoryProperties.class);
         RagProperties rag = bind(environment, "agent.rag", RagProperties.class);
         AgentTraceProperties trace = bind(environment, "agent.trace", AgentTraceProperties.class);
+        ToolConfirmationProperties toolApproval = bind(
+                environment,
+                "agent.tool-approval",
+                ToolConfirmationProperties.class
+        );
         TavilyProperties tavily = bind(environment, "tavily", TavilyProperties.class);
         FeishuProperties feishu = bind(environment, "feishu", FeishuProperties.class);
 
@@ -80,6 +88,8 @@ class ApplicationPropertiesBindingTest {
         assertThat(memory.repository()).isEqualTo("jdbc");
         assertThat(rag.indexFile()).isEqualTo(Path.of("data/test-rag-index.json"));
         assertThat(trace.repository()).isEqualTo("jdbc");
+        assertThat(toolApproval.repository()).isEqualTo("jdbc");
+        assertThat(toolApproval.ttl()).isEqualTo(Duration.ofMinutes(10));
         assertThat(tavily.apiKey()).isEqualTo("tavily-api-key");
         assertThat(feishu.appId()).isEqualTo("feishu-app-id");
         assertThat(feishu.appSecret()).isEqualTo("feishu-app-secret");

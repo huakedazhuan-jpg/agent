@@ -50,6 +50,9 @@ tavily:
 agent:
   trace:
     repository: ${AGENT_TRACE_REPOSITORY:memory}
+  tool-approval:
+    repository: ${AGENT_TOOL_APPROVAL_REPOSITORY:memory}
+    ttl: ${AGENT_TOOL_APPROVAL_TTL:15m}
   kimi:
     request-timeout: ${AGENT_KIMI_REQUEST_TIMEOUT:60s}
     max-tool-rounds: ${AGENT_KIMI_MAX_TOOL_ROUNDS:5}

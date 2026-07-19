@@ -1,6 +1,6 @@
 # Infrastructure
 
-This phase introduces baseline durable infrastructure. Agent trace and chat memory can now use PostgreSQL through JDBC repositories, while some runtime state still uses prototype adapters such as in-memory tool approval state.
+This phase introduces baseline durable infrastructure. Agent trace, chat memory, and tool approvals can now use PostgreSQL through JDBC repositories. Feishu inbox processing still uses a prototype runtime adapter.
 
 ## Services
 
@@ -68,8 +68,17 @@ Chat memory can now use PostgreSQL:
 AGENT_MEMORY_REPOSITORY=jdbc
 ```
 
-The defaults remain `AGENT_TRACE_REPOSITORY=memory` and `AGENT_MEMORY_REPOSITORY=file` so local tests and development startup do not require a running database. Tool approval and Feishu event inbox wiring remain planned Phase 2 work.
+Tool approvals can now use PostgreSQL with a configurable expiry:
+
+```properties
+AGENT_TOOL_APPROVAL_REPOSITORY=jdbc
+AGENT_TOOL_APPROVAL_TTL=15m
+```
+
+Approval decisions use a conditional database update from `PENDING` to `APPROVED` or `REJECTED`. This prevents two application instances from deciding the same approval twice. Expired pending records transition to `EXPIRED`, and only sanitized argument previews are persisted.
+
+The defaults remain `AGENT_TRACE_REPOSITORY=memory`, `AGENT_MEMORY_REPOSITORY=file`, and `AGENT_TOOL_APPROVAL_REPOSITORY=memory` so local tests and development startup do not require a running database. Feishu event inbox wiring remains planned Phase 2 work.
 
 ## Current safety boundary
 
-The local default passwords in `.env.example` and `docker-compose.yml` are only for development. Production must provide explicit database and Redis credentials through environment variables or a secret manager. Production also must enable Flyway and set `AGENT_TRACE_REPOSITORY=jdbc` and `AGENT_MEMORY_REPOSITORY=jdbc`.
+The local default passwords in `.env.example` and `docker-compose.yml` are only for development. Production must provide explicit database and Redis credentials through environment variables or a secret manager. Production also must enable Flyway and set `AGENT_TRACE_REPOSITORY=jdbc`, `AGENT_MEMORY_REPOSITORY=jdbc`, and `AGENT_TOOL_APPROVAL_REPOSITORY=jdbc`.
