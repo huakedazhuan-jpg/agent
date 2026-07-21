@@ -1,0 +1,204 @@
+package com.hkdzagent.agent.tool;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class ToolExecutionPipelineTest {
+
+    @Test
+    void lowRiskNeverApprovalToolExecutesThroughTheValidatedPipeline() {
+        CountingTool tool = new CountingTool(metadata(
+                "publicSearch", ToolRiskLevel.LOW, ToolApprovalPolicy.NEVER
+        ));
+        ToolExecutionPipeline pipeline = pipeline(tool, ToolAccessPolicy.allowAuthenticated(), invocation -> false);
+
+        ToolPipelineResult result = pipeline.invoke(context(Set.of("ROLE_USER")),
+                "publicSearch", "{\"value\":\"news\"}");
+
+        assertThat(result.status()).isEqualTo(ToolPipelineResult.Status.COMPLETED);
+        assertThat(result.toolResult().message()).isEqualTo("news");
+        assertThat(result.argumentsHash()).matches("[0-9a-f]{64}");
+        assertThat(tool.executions()).isEqualTo(1);
+    }
+
+    @Test
+    void assessmentValidatesAndAuthorizesWithoutExecutingTheTool() {
+        CountingTool tool = new CountingTool(metadata(
+                "publicSearch", ToolRiskLevel.LOW, ToolApprovalPolicy.NEVER
+        ));
+        ToolExecutionPipeline pipeline = pipeline(
+                tool, ToolAccessPolicy.allowAuthenticated(), invocation -> false);
+
+        ToolPipelineResult result = pipeline.assess(
+                context(Set.of("ROLE_USER")), "publicSearch", "{\"value\":\"news\"}");
+
+        assertThat(result.status()).isEqualTo(ToolPipelineResult.Status.READY);
+        assertThat(result.argumentsHash()).matches("[0-9a-f]{64}");
+        assertThat(tool.executions()).isZero();
+    }
+
+    @Test
+    void highRiskAlwaysApprovalToolNeverExecutesBeforeApproval() {
+        CountingTool tool = new CountingTool(metadata(
+                "writeFile", ToolRiskLevel.HIGH, ToolApprovalPolicy.ALWAYS
+        ));
+        ToolExecutionPipeline pipeline = pipeline(tool, ToolAccessPolicy.allowAuthenticated(), invocation -> false);
+
+        ToolPipelineResult result = pipeline.invoke(context(Set.of("ROLE_USER")),
+                "writeFile", "{\"value\":\"payload\"}");
+
+        assertThat(result.status()).isEqualTo(ToolPipelineResult.Status.APPROVAL_REQUIRED);
+        assertThat(result.argumentsHash()).matches("[0-9a-f]{64}");
+        assertThat(result.argumentsPreview()).contains("payload");
+        assertThat(result.toolResult()).isNull();
+        assertThat(tool.executions()).isZero();
+    }
+
+    @Test
+    void approvedInvocationExecutesOnlyWhenVersionAndArgumentsHashStillMatch() {
+        CountingTool tool = new CountingTool(metadata(
+                "writeFile", ToolRiskLevel.HIGH, ToolApprovalPolicy.ALWAYS
+        ));
+        ToolExecutionPipeline pipeline = pipeline(
+                tool, ToolAccessPolicy.allowAuthenticated(), invocation -> false);
+        ToolInvocationContext context = context(Set.of("ROLE_USER"));
+        ToolPipelineResult assessment = pipeline.assess(
+                context, "writeFile", "{\"value\":\"payload\"}");
+
+        ToolPipelineResult result = pipeline.invokeApproved(
+                context,
+                "writeFile",
+                "{\"value\":\"payload\"}",
+                assessment.toolVersion(),
+                assessment.argumentsHash()
+        );
+
+        assertThat(result.status()).isEqualTo(ToolPipelineResult.Status.COMPLETED);
+        assertThat(result.toolResult().message()).isEqualTo("payload");
+        assertThat(tool.executions()).isOne();
+    }
+
+    @Test
+    void approvedInvocationRejectsChangedArgumentsBeforeToolExecution() {
+        CountingTool tool = new CountingTool(metadata(
+                "writeFile", ToolRiskLevel.HIGH, ToolApprovalPolicy.ALWAYS
+        ));
+        ToolExecutionPipeline pipeline = pipeline(
+                tool, ToolAccessPolicy.allowAuthenticated(), invocation -> false);
+        ToolInvocationContext context = context(Set.of("ROLE_USER"));
+        ToolPipelineResult assessment = pipeline.assess(
+                context, "writeFile", "{\"value\":\"approved\"}");
+
+        ToolPipelineResult result = pipeline.invokeApproved(
+                context,
+                "writeFile",
+                "{\"value\":\"tampered\"}",
+                assessment.toolVersion(),
+                assessment.argumentsHash()
+        );
+
+        assertThat(result.status()).isEqualTo(ToolPipelineResult.Status.REJECTED);
+        assertThat(result.reason()).contains("arguments hash");
+        assertThat(tool.executions()).isZero();
+    }
+
+    @Test
+    void conditionalPolicyCanRequireApprovalWithoutChangingToolMetadata() {
+        CountingTool tool = new CountingTool(metadata(
+                "httpGet", ToolRiskLevel.MEDIUM, ToolApprovalPolicy.CONDITIONAL
+        ));
+        ToolExecutionPipeline pipeline = pipeline(tool, ToolAccessPolicy.allowAuthenticated(), invocation -> true);
+
+        ToolPipelineResult result = pipeline.invoke(context(Set.of("ROLE_USER")),
+                "httpGet", "{\"value\":\"https://example.com\"}");
+
+        assertThat(result.status()).isEqualTo(ToolPipelineResult.Status.APPROVAL_REQUIRED);
+        assertThat(tool.executions()).isZero();
+    }
+
+    @Test
+    void authorizationDenialShortCircuitsBeforeApprovalAndExecution() {
+        CountingTool tool = new CountingTool(metadata(
+                "adminTool", ToolRiskLevel.LOW, ToolApprovalPolicy.NEVER
+        ));
+        ToolAccessPolicy adminOnly = (context, metadata) -> context.authorities().contains("ROLE_ADMIN")
+                ? ToolAccessDecision.allow()
+                : ToolAccessDecision.deny("admin role required");
+        ToolExecutionPipeline pipeline = pipeline(tool, adminOnly, invocation -> false);
+
+        ToolPipelineResult result = pipeline.invoke(context(Set.of("ROLE_USER")),
+                "adminTool", "{\"value\":\"data\"}");
+
+        assertThat(result.status()).isEqualTo(ToolPipelineResult.Status.REJECTED);
+        assertThat(result.reason()).contains("admin role required");
+        assertThat(tool.executions()).isZero();
+    }
+
+    private ToolExecutionPipeline pipeline(
+            CountingTool tool,
+            ToolAccessPolicy accessPolicy,
+            ToolApprovalCondition approvalCondition
+    ) {
+        AgentToolRegistry registry = new AgentToolRegistry(List.of(tool));
+        ToolInvocationValidator validator = new ToolInvocationValidator(registry, new ObjectMapper(), 160);
+        return new ToolExecutionPipeline(validator, new ToolPolicyEngine(accessPolicy, approvalCondition));
+    }
+
+    private ToolInvocationContext context(Set<String> authorities) {
+        return new ToolInvocationContext(
+                "user:42", "550e8400-e29b-41d4-a716-446655440000",
+                "trace-1", "call-1", authorities
+        );
+    }
+
+    private ToolMetadata metadata(
+            String name,
+            ToolRiskLevel risk,
+            ToolApprovalPolicy approvalPolicy
+    ) {
+        return new ToolMetadata(
+                name, "1.0.0",
+                "{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\"}},\"required\":[\"value\"],\"additionalProperties\":false}",
+                risk, approvalPolicy, Duration.ofSeconds(1), ToolRetryPolicy.none()
+        );
+    }
+
+    private record Input(String value) {
+    }
+
+    private static final class CountingTool implements AgentTool<Input, ToolResult> {
+        private final ToolMetadata metadata;
+        private final AtomicInteger executions = new AtomicInteger();
+
+        private CountingTool(ToolMetadata metadata) {
+            this.metadata = metadata;
+        }
+
+        @Override
+        public ToolMetadata metadata() {
+            return metadata;
+        }
+
+        @Override
+        public Class<Input> inputType() {
+            return Input.class;
+        }
+
+        @Override
+        public ToolResult execute(Input input) {
+            executions.incrementAndGet();
+            return ToolResult.success(input.value());
+        }
+
+        private int executions() {
+            return executions.get();
+        }
+    }
+}

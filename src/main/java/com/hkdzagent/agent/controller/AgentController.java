@@ -18,6 +18,8 @@ import com.hkdzagent.agent.runtime.AgentRunEventType;
 import com.hkdzagent.agent.runtime.AgentRuntimeExecutor;
 import com.hkdzagent.agent.runtime.AgentRuntimeProperties;
 import com.hkdzagent.agent.runtime.AgentRuntimeService;
+import com.hkdzagent.agent.runtime.AgentRunCoordinator;
+import com.hkdzagent.agent.runtime.AgentRunStatus;
 import com.hkdzagent.agent.runtime.AgentApprovalOrchestrator;
 import com.hkdzagent.agent.runtime.AgentApprovalPauseService;
 import com.hkdzagent.agent.runtime.InMemoryAgentRunRepository;
@@ -29,6 +31,7 @@ import com.hkdzagent.agent.trace.AgentTraceSanitizer;
 import com.hkdzagent.agent.trace.InMemoryAgentTraceRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -58,6 +61,7 @@ public class AgentController {
     private ToolConfirmationService confirmationService = new ToolConfirmationService(fallbackSanitizer);
     private AgentRuntimeService runtimeService;
     private AgentRuntimeExecutor runtimeExecutor;
+    private AgentRunCoordinator runCoordinator;
     private AgentApprovalOrchestrator approvalOrchestrator;
 
     public AgentController(LLMClient llmClient) {
@@ -72,14 +76,32 @@ public class AgentController {
                 runtimeService, llmClient, traceRecorder, fallbackSanitizer,
                 new AgentApprovalPauseService(confirmationService, runtimeService, fallbackSanitizer),
                 new ToolConfirmationProperties());
+        this.runCoordinator = new AgentRunCoordinator(
+                runtimeService, runtimeExecutor, traceRecorder);
     }
 
     @PostMapping("/api/agent/chat")
-    public ChatResponse chat(@RequestBody ChatRequest request, Authentication authentication) {
+    public ResponseEntity<?> chat(
+            @RequestBody ChatRequest request,
+            Authentication authentication
+    ) {
         ActorIdentity owner = actorResolver.resolve(authentication);
         String sessionId = normalizeSessionId(request.sessionId());
-        String answer = llmClient.askWithTools(request.message(), ownedConversationId(owner, sessionId));
-        return new ChatResponse(answer);
+        AgentRun run = runCoordinator.execute(
+                owner,
+                sessionId,
+                ownedConversationId(owner, sessionId),
+                request.message(),
+                "http-chat"
+        );
+        if (run.status() == AgentRunStatus.COMPLETED) {
+            return ResponseEntity.ok(new ChatResponse(run.finalAnswer()));
+        }
+        AgentRunSubmissionResponse response = AgentRunSubmissionResponse.from(run);
+        if (run.status() == AgentRunStatus.WAITING_APPROVAL) {
+            return ResponseEntity.accepted().body(response);
+        }
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(response);
     }
 
     @PostMapping(value = "/api/agent/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -230,6 +252,11 @@ public class AgentController {
     }
 
     @Autowired(required = false)
+    void setRunCoordinator(AgentRunCoordinator runCoordinator) {
+        this.runCoordinator = runCoordinator;
+    }
+
+    @Autowired(required = false)
     void setApprovalOrchestrator(AgentApprovalOrchestrator approvalOrchestrator) {
         this.approvalOrchestrator = approvalOrchestrator;
     }
@@ -328,6 +355,20 @@ public class AgentController {
                     run.pendingApprovalId(), run.finalAnswer(), run.errorMessage(),
                     run.createdAt(), run.updatedAt(), run.completedAt()
             );
+        }
+    }
+
+    private record AgentRunSubmissionResponse(
+            String runId,
+            String traceId,
+            String status,
+            String pendingApprovalId,
+            String errorMessage
+    ) {
+        private static AgentRunSubmissionResponse from(AgentRun run) {
+            return new AgentRunSubmissionResponse(
+                    run.runId(), run.traceId(), run.status().name(),
+                    run.pendingApprovalId(), run.errorMessage());
         }
     }
 }

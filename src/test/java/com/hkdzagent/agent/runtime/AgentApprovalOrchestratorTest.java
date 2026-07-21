@@ -8,6 +8,7 @@ import com.hkdzagent.agent.console.ToolConfirmation;
 import com.hkdzagent.agent.console.ToolConfirmationProperties;
 import com.hkdzagent.agent.console.ToolConfirmationService;
 import com.hkdzagent.agent.loop.AgentLoopResult;
+import com.hkdzagent.agent.loop.AgentObservation;
 import com.hkdzagent.agent.security.ActorIdentity;
 import com.hkdzagent.agent.trace.AgentTraceRecorder;
 import com.hkdzagent.agent.trace.AgentTraceSanitizer;
@@ -43,10 +44,10 @@ class AgentApprovalOrchestratorTest {
         assertThat(fixture.runtime.find(run.runId()).status()).isEqualTo(AgentRunStatus.COMPLETED);
         assertThat(fixture.runtime.find(run.runId()).finalAnswer()).isEqualTo("resumed answer");
         verify(fixture.llm, times(1)).resumeWithApprovedTool(
-                anyString(), any(AgentExecutionObserver.class));
+                anyString(), any(AgentObservation.class), any(AgentExecutionObserver.class));
         assertThatIllegalStateException().isThrownBy(() -> fixture.orchestrator.approve(pending.id()));
         verify(fixture.llm, times(1)).resumeWithApprovedTool(
-                anyString(), any(AgentExecutionObserver.class));
+                anyString(), any(AgentObservation.class), any(AgentExecutionObserver.class));
     }
 
     @Test
@@ -61,7 +62,7 @@ class AgentApprovalOrchestratorTest {
         assertThat(rejected.status()).isEqualTo(AgentRunStatus.FAILED);
         assertThat(rejected.errorMessage()).isEqualTo("command not allowed");
         verify(fixture.llm, times(0)).resumeWithApprovedTool(
-                anyString(), any(AgentExecutionObserver.class));
+                anyString(), any(AgentObservation.class), any(AgentExecutionObserver.class));
     }
 
     @Test
@@ -77,7 +78,7 @@ class AgentApprovalOrchestratorTest {
 
         assertThat(fixture.runtime.find(run.runId()).status()).isEqualTo(AgentRunStatus.COMPLETED);
         verify(fixture.llm, times(1)).resumeWithApprovedTool(
-                anyString(), any(AgentExecutionObserver.class));
+                anyString(), any(AgentObservation.class), any(AgentExecutionObserver.class));
     }
 
     @Test
@@ -106,7 +107,7 @@ class AgentApprovalOrchestratorTest {
         assertThat(expired.status()).isEqualTo(AgentRunStatus.FAILED);
         assertThat(expired.errorMessage()).isEqualTo("approval expired");
         verify(fixture.llm, times(0)).resumeWithApprovedTool(
-                anyString(), any(AgentExecutionObserver.class));
+                anyString(), any(AgentObservation.class), any(AgentExecutionObserver.class));
     }
 
     private Fixture fixture() {
@@ -134,14 +135,21 @@ class AgentApprovalOrchestratorTest {
                             AgentLoopResult.Status.WAITING_APPROVAL,
                             invocation.getArgument(2), "waiting", List.of());
                 });
-        when(llm.resumeWithApprovedTool(anyString(), any(AgentExecutionObserver.class)))
+        ApprovedToolExecutionService approvedToolExecutionService =
+                mock(ApprovedToolExecutionService.class);
+        when(approvedToolExecutionService.execute(any(AgentRun.class), anyString()))
+                .thenReturn(new ApprovedToolExecution(
+                        1, "call-1",
+                        new AgentObservation("commandExecuteTool", "tests passed", true)));
+        when(llm.resumeWithApprovedTool(
+                anyString(), any(AgentObservation.class), any(AgentExecutionObserver.class)))
                 .thenReturn(new AgentLoopResult(
                         AgentLoopResult.Status.COMPLETED, "trace-approval", "resumed answer", List.of()));
         ToolConfirmationProperties approvalProperties = new ToolConfirmationProperties();
         AgentRuntimeExecutor runtimeExecutor = new AgentRuntimeExecutor(
                 runtime, llm, recorder, sanitizer,
                 new AgentApprovalPauseService(confirmationService, runtime, sanitizer),
-                approvalProperties);
+                approvalProperties, null, approvedToolExecutionService);
         AgentApprovalOrchestrator orchestrator = new AgentApprovalOrchestrator(
                 confirmationService, confirmations, runtime, runtimeExecutor, recorder, Runnable::run);
         return new Fixture(runtime, confirmations, recorder, llm, runtimeExecutor, orchestrator);

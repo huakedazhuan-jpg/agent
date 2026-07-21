@@ -8,8 +8,19 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 
-public class HttpRequestTool {
+public class HttpRequestTool implements AgentTool<WebRequest, ToolResult> {
+
+    private static final ToolMetadata METADATA = new ToolMetadata(
+            "httpRequestTool",
+            "1.0.0",
+            "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"}},\"required\":[\"url\"],\"additionalProperties\":false}",
+            ToolRiskLevel.MEDIUM,
+            ToolApprovalPolicy.CONDITIONAL,
+            Duration.ofSeconds(5),
+            ToolRetryPolicy.none()
+    );
 
     private final ToolPermissionService permissionService;
 
@@ -17,6 +28,17 @@ public class HttpRequestTool {
         this.permissionService = permissionService;
     }
 
+    @Override
+    public ToolMetadata metadata() {
+        return METADATA;
+    }
+
+    @Override
+    public Class<WebRequest> inputType() {
+        return WebRequest.class;
+    }
+
+    @Override
     public ToolResult execute(WebRequest request) throws Exception {
         try {
             URI uri = URI.create(request.url());

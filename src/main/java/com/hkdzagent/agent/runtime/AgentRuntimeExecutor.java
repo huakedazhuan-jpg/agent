@@ -3,12 +3,18 @@ package com.hkdzagent.agent.runtime;
 import com.hkdzagent.agent.ai.AgentExecutionObserver;
 import com.hkdzagent.agent.ai.LLMClient;
 import com.hkdzagent.agent.loop.AgentLoopResult;
+import com.hkdzagent.agent.loop.AgentObservation;
 import com.hkdzagent.agent.console.ToolConfirmationProperties;
+import com.hkdzagent.agent.tool.ToolExecutionPipeline;
+import com.hkdzagent.agent.tool.ToolInvocationContext;
+import com.hkdzagent.agent.tool.ToolPipelineResult;
 import com.hkdzagent.agent.trace.AgentTraceRecorder;
 import com.hkdzagent.agent.trace.AgentTraceSanitizer;
 
 import java.time.Duration;
 import java.util.Map;
+import java.util.HashMap;
+import java.util.Set;
 import java.util.function.Consumer;
 
 public class AgentRuntimeExecutor {
@@ -19,6 +25,10 @@ public class AgentRuntimeExecutor {
     private final AgentTraceSanitizer sanitizer;
     private final AgentApprovalPauseService approvalPauseService;
     private final ToolConfirmationProperties confirmationProperties;
+    private final ToolExecutionPipeline toolExecutionPipeline;
+    private final ApprovedToolExecutionService approvedToolExecutionService;
+    private final AgentCompletionService completionService;
+    private final AgentFailureService failureService;
 
     public AgentRuntimeExecutor(
             AgentRuntimeService runtimeService,
@@ -28,12 +38,77 @@ public class AgentRuntimeExecutor {
             AgentApprovalPauseService approvalPauseService,
             ToolConfirmationProperties confirmationProperties
     ) {
+        this(runtimeService, llmClient, traceRecorder, sanitizer,
+                approvalPauseService, confirmationProperties, null, null, null, null);
+    }
+
+    public AgentRuntimeExecutor(
+            AgentRuntimeService runtimeService,
+            LLMClient llmClient,
+            AgentTraceRecorder traceRecorder,
+            AgentTraceSanitizer sanitizer,
+            AgentApprovalPauseService approvalPauseService,
+            ToolConfirmationProperties confirmationProperties,
+            ToolExecutionPipeline toolExecutionPipeline
+    ) {
+        this(runtimeService, llmClient, traceRecorder, sanitizer,
+                approvalPauseService, confirmationProperties,
+                toolExecutionPipeline, null, null, null);
+    }
+
+    public AgentRuntimeExecutor(
+            AgentRuntimeService runtimeService,
+            LLMClient llmClient,
+            AgentTraceRecorder traceRecorder,
+            AgentTraceSanitizer sanitizer,
+            AgentApprovalPauseService approvalPauseService,
+            ToolConfirmationProperties confirmationProperties,
+            ToolExecutionPipeline toolExecutionPipeline,
+            ApprovedToolExecutionService approvedToolExecutionService
+    ) {
+        this(runtimeService, llmClient, traceRecorder, sanitizer,
+                approvalPauseService, confirmationProperties,
+                toolExecutionPipeline, approvedToolExecutionService, null, null);
+    }
+
+    public AgentRuntimeExecutor(
+            AgentRuntimeService runtimeService,
+            LLMClient llmClient,
+            AgentTraceRecorder traceRecorder,
+            AgentTraceSanitizer sanitizer,
+            AgentApprovalPauseService approvalPauseService,
+            ToolConfirmationProperties confirmationProperties,
+            ToolExecutionPipeline toolExecutionPipeline,
+            ApprovedToolExecutionService approvedToolExecutionService,
+            AgentCompletionService completionService
+    ) {
+        this(runtimeService, llmClient, traceRecorder, sanitizer,
+                approvalPauseService, confirmationProperties, toolExecutionPipeline,
+                approvedToolExecutionService, completionService, null);
+    }
+
+    public AgentRuntimeExecutor(
+            AgentRuntimeService runtimeService,
+            LLMClient llmClient,
+            AgentTraceRecorder traceRecorder,
+            AgentTraceSanitizer sanitizer,
+            AgentApprovalPauseService approvalPauseService,
+            ToolConfirmationProperties confirmationProperties,
+            ToolExecutionPipeline toolExecutionPipeline,
+            ApprovedToolExecutionService approvedToolExecutionService,
+            AgentCompletionService completionService,
+            AgentFailureService failureService
+    ) {
         this.runtimeService = runtimeService;
         this.llmClient = llmClient;
         this.traceRecorder = traceRecorder;
         this.sanitizer = sanitizer;
         this.approvalPauseService = approvalPauseService;
         this.confirmationProperties = confirmationProperties;
+        this.toolExecutionPipeline = toolExecutionPipeline;
+        this.approvedToolExecutionService = approvedToolExecutionService;
+        this.completionService = completionService;
+        this.failureService = failureService;
     }
 
     public void execute(String runId, String workerId, Consumer<AgentRunEvent> eventConsumer) {
@@ -50,9 +125,10 @@ public class AgentRuntimeExecutor {
                     run.userMessage(), run.conversationId(), run.traceId(), observer);
             handleResult(run, workerId, result, eventConsumer);
         } catch (Exception exception) {
-            failSafely(run, workerId, exception);
-            emit(runId, AgentRunEventType.RUN_FAILED,
-                    Map.of("error", sanitizer.preview(safeMessage(exception))), eventConsumer);
+            AgentRunEvent event = failExecution(
+                    run, workerId, sanitizer.preview(safeMessage(exception)));
+            accept(event, eventConsumer);
+            recordFailureTrace(run, safeMessage(exception));
         }
     }
 
@@ -67,12 +143,19 @@ public class AgentRuntimeExecutor {
                 Map.of("workerId", workerId, "resumed", true, "approvalId", approvalId), eventConsumer);
         RuntimeObserver observer = new RuntimeObserver(run, workerId, eventConsumer);
         try {
-            AgentLoopResult result = llmClient.resumeWithApprovedTool(run.checkpointJson(), observer);
+            if (approvedToolExecutionService == null) {
+                throw new IllegalStateException("approved tool execution service is not configured");
+            }
+            ApprovedToolExecution approvedExecution =
+                    approvedToolExecutionService.execute(run, approvalId);
+            AgentLoopResult result = llmClient.resumeWithApprovedTool(
+                    run.checkpointJson(), approvedExecution.observation(), observer);
             handleResult(run, workerId, result, eventConsumer);
         } catch (Exception exception) {
-            failSafely(run, workerId, exception);
-            emit(runId, AgentRunEventType.RUN_FAILED,
-                    Map.of("error", sanitizer.preview(safeMessage(exception))), eventConsumer);
+            AgentRunEvent event = failExecution(
+                    run, workerId, sanitizer.preview(safeMessage(exception)));
+            accept(event, eventConsumer);
+            recordFailureTrace(run, safeMessage(exception));
         }
     }
 
@@ -86,28 +169,51 @@ public class AgentRuntimeExecutor {
             return;
         }
         if (result.status() != AgentLoopResult.Status.COMPLETED) {
-            runtimeService.fail(run.runId(), workerId, sanitizer.preview(result.finalAnswer()));
-            traceRecorder.recordError(run.traceId(), 0, result.finalAnswer(), Duration.ZERO);
-            traceRecorder.finishTrace(run.traceId(), "FAILED");
-            emit(run.runId(), AgentRunEventType.RUN_FAILED,
-                    Map.of("error", sanitizer.preview(result.finalAnswer())), eventConsumer);
+            AgentRunEvent event = failExecution(
+                    run, workerId, sanitizer.preview(result.finalAnswer()));
+            accept(event, eventConsumer);
+            recordFailureTrace(run, result.finalAnswer());
             return;
         }
-        runtimeService.complete(run.runId(), workerId, result.finalAnswer());
+        if (completionService == null) {
+            runtimeService.complete(run.runId(), workerId, result.finalAnswer());
+        } else {
+            completionService.complete(run.runId(), workerId, result.finalAnswer());
+        }
         traceRecorder.recordFinalAnswer(run.traceId(), result.finalAnswer());
         traceRecorder.finishTrace(run.traceId(), "COMPLETED");
         emit(run.runId(), AgentRunEventType.RUN_COMPLETED,
                 Map.of("answer", result.finalAnswer()), eventConsumer);
     }
 
-    private void failSafely(AgentRun run, String workerId, Exception exception) {
-        try {
-            runtimeService.fail(run.runId(), workerId, sanitizer.preview(safeMessage(exception)));
-        } catch (Exception ignored) {
-            // Preserve the original execution failure if another worker already changed the run.
+    private AgentRunEvent failExecution(AgentRun run, String workerId, String error) {
+        if (failureService != null) {
+            return failureService.fail(run.runId(), workerId, error);
         }
-        traceRecorder.recordError(run.traceId(), 0, safeMessage(exception), Duration.ZERO);
-        traceRecorder.finishTrace(run.traceId(), "FAILED");
+        String normalized = error == null || error.isBlank()
+                ? "agent execution failed"
+                : error;
+        runtimeService.fail(run.runId(), workerId, normalized);
+        return runtimeService.appendEvent(
+                run.runId(), AgentRunEventType.RUN_FAILED, Map.of("error", normalized));
+    }
+
+    private void recordFailureTrace(AgentRun run, String error) {
+        try {
+            traceRecorder.recordError(
+                    run.traceId(), 0,
+                    error == null ? "agent execution failed" : error,
+                    Duration.ZERO);
+            traceRecorder.finishTrace(run.traceId(), "FAILED");
+        } catch (Exception ignored) {
+            // Durable run and notification state must not be retried because tracing failed.
+        }
+    }
+
+    private void accept(AgentRunEvent event, Consumer<AgentRunEvent> eventConsumer) {
+        if (eventConsumer != null) {
+            eventConsumer.accept(event);
+        }
     }
 
     private AgentRun requireRun(String runId) {
@@ -140,6 +246,7 @@ public class AgentRuntimeExecutor {
         private final AgentRun run;
         private final String workerId;
         private final Consumer<AgentRunEvent> consumer;
+        private final Map<String, PendingToolAssessment> pendingAssessments = new HashMap<>();
 
         private RuntimeObserver(AgentRun run, String workerId, Consumer<AgentRunEvent> consumer) {
             this.run = run;
@@ -183,6 +290,36 @@ public class AgentRuntimeExecutor {
         }
 
         @Override
+        public boolean requiresApproval(
+                int step, String toolCallId, String toolName, String arguments
+        ) {
+            if (toolExecutionPipeline == null) {
+                return requiresApproval(step, toolName, arguments);
+            }
+            ToolPipelineResult assessment = toolExecutionPipeline.assess(
+                    new ToolInvocationContext(
+                            run.ownerKey(), run.runId(), run.traceId(), toolCallId, Set.of()),
+                    toolName,
+                    arguments
+            );
+            if (assessment.status() == ToolPipelineResult.Status.READY
+                    || assessment.status() == ToolPipelineResult.Status.APPROVAL_REQUIRED) {
+                pendingAssessments.put(
+                        toolCallId, new PendingToolAssessment(arguments, assessment));
+            } else {
+                pendingAssessments.remove(toolCallId);
+            }
+            return switch (assessment.status()) {
+                case READY -> false;
+                case APPROVAL_REQUIRED -> true;
+                case REJECTED, FAILED -> throw new IllegalArgumentException(
+                        "tool invocation rejected: " + assessment.reason());
+                case COMPLETED -> throw new IllegalStateException(
+                        "tool assessment must not execute the tool");
+            };
+        }
+
+        @Override
         public void approvalRequired(
                 int step, String toolName, String arguments, String checkpointJson
         ) {
@@ -191,6 +328,77 @@ public class AgentRuntimeExecutor {
             if (consumer != null) {
                 consumer.accept(event);
             }
+        }
+
+        @Override
+        public void approvalRequired(
+                int step,
+                String toolCallId,
+                String toolName,
+                String arguments,
+                String checkpointJson
+        ) {
+            if (toolExecutionPipeline == null) {
+                approvalRequired(step, toolName, arguments, checkpointJson);
+                return;
+            }
+            PendingToolAssessment pending = pendingAssessments.remove(toolCallId);
+            ToolPipelineResult assessment = pending == null ? null : pending.assessment();
+            if (assessment == null
+                    || assessment.status() != ToolPipelineResult.Status.APPROVAL_REQUIRED
+                    || !toolName.equals(assessment.toolName())
+                    || !arguments.equals(pending.arguments())) {
+                throw new IllegalStateException(
+                        "approval request does not match a pending tool assessment");
+            }
+            ToolInvocationContext context = new ToolInvocationContext(
+                    run.ownerKey(), run.runId(), run.traceId(), toolCallId, Set.of());
+            AgentRunEvent event = approvalPauseService.pauseBoundInvocation(
+                    run, workerId, step, context, arguments, assessment, checkpointJson);
+            if (consumer != null) {
+                consumer.accept(event);
+            }
+        }
+
+        @Override
+        public AgentObservation executeTool(
+                int step,
+                String toolCallId,
+                String toolName,
+                String arguments
+        ) {
+            if (toolExecutionPipeline == null) {
+                return null;
+            }
+            PendingToolAssessment pending = pendingAssessments.remove(toolCallId);
+            if (pending == null
+                    || pending.assessment().status() != ToolPipelineResult.Status.READY
+                    || !toolName.equals(pending.assessment().toolName())
+                    || !arguments.equals(pending.arguments())) {
+                throw new SecurityException(
+                        "tool execution does not match a ready tool assessment");
+            }
+            ToolInvocationContext context = new ToolInvocationContext(
+                    run.ownerKey(), run.runId(), run.traceId(), toolCallId, Set.of());
+            ToolPipelineResult result = toolExecutionPipeline.invoke(
+                    context, toolName, arguments);
+            if (!pending.assessment().toolVersion().equals(result.toolVersion())
+                    || !pending.assessment().argumentsHash().equals(result.argumentsHash())) {
+                throw new SecurityException(
+                        "tool execution binding changed after assessment");
+            }
+            if (result.status() == ToolPipelineResult.Status.READY
+                    || result.status() == ToolPipelineResult.Status.APPROVAL_REQUIRED) {
+                throw new IllegalStateException(
+                        "tool policy changed after the execution assessment");
+            }
+            if (result.toolResult() == null) {
+                throw new SecurityException("tool invocation was rejected: " + result.reason());
+            }
+            return new AgentObservation(
+                    toolName,
+                    result.toolResult().message(),
+                    result.status() == ToolPipelineResult.Status.COMPLETED);
         }
 
         @Override
@@ -206,6 +414,12 @@ public class AgentRuntimeExecutor {
             emit(runId(), AgentRunEventType.TOOL_COMPLETED,
                     Map.of("step", step, "toolName", toolName, "success", success,
                             "observation", observation == null ? "" : sanitizer.preview(observation)), consumer);
+        }
+
+        private record PendingToolAssessment(
+                String arguments,
+                ToolPipelineResult assessment
+        ) {
         }
     }
 }

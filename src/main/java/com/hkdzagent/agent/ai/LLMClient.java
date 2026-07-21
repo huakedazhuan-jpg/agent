@@ -6,6 +6,7 @@ import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import com.hkdzagent.agent.loop.AgentLoopResult;
+import com.hkdzagent.agent.loop.AgentObservation;
 
 @Service
 public class LLMClient {
@@ -75,9 +76,11 @@ public class LLMClient {
 
     public AgentLoopResult resumeWithApprovedTool(
             String checkpointJson,
+            AgentObservation approvedObservation,
             AgentExecutionObserver observer
     ) {
-        return kimiToolCallingClient.resumeWithApprovedTool(checkpointJson, observer);
+        return kimiToolCallingClient.resumeWithApprovedTool(
+                checkpointJson, approvedObservation, observer);
     }
 }
 

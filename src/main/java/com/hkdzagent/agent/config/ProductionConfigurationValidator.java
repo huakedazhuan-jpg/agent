@@ -74,6 +74,14 @@ public class ProductionConfigurationValidator implements InitializingBean {
             unsafeProperties.add("feishu.inbox.repository must be jdbc in prod");
         }
 
+        if (!jdbcFeishuOutboxRepositoryEnabled()) {
+            unsafeProperties.add("feishu.outbox.repository must be jdbc in prod");
+        }
+
+        if (!jdbcAdminAuditRepositoryEnabled()) {
+            unsafeProperties.add("agent.audit.repository must be jdbc in prod");
+        }
+
         if (!authenticationEnabled()) {
             unsafeProperties.add("agent.security.enabled must be true in prod");
         }
@@ -150,6 +158,16 @@ public class ProductionConfigurationValidator implements InitializingBean {
 
     private boolean jdbcFeishuInboxRepositoryEnabled() {
         String repository = environment.getProperty("feishu.inbox.repository", "");
+        return "jdbc".equalsIgnoreCase(repository.trim());
+    }
+
+    private boolean jdbcFeishuOutboxRepositoryEnabled() {
+        String repository = environment.getProperty("feishu.outbox.repository", "");
+        return "jdbc".equalsIgnoreCase(repository.trim());
+    }
+
+    private boolean jdbcAdminAuditRepositoryEnabled() {
+        String repository = environment.getProperty("agent.audit.repository", "");
         return "jdbc".equalsIgnoreCase(repository.trim());
     }
 

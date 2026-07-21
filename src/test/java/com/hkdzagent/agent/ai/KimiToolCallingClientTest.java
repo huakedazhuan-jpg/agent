@@ -265,10 +265,57 @@ class KimiToolCallingClientTest {
     }
 
     @Test
+    void managedObserverExecutesReadyToolInsteadOfLegacyFunctionPath() throws Exception {
+        List<String> requestBodies = new ArrayList<>();
+        AtomicInteger legacyExecutions = new AtomicInteger();
+        AtomicReference<String> executedToolCallId = new AtomicReference<>();
+
+        try (MockOpenAiServer server = MockOpenAiServer.start(requestBodies, requestIndex ->
+                requestIndex == 1
+                        ? toolCallResponse(
+                                "need command", "commandExecuteTool",
+                                "{\"command\":\"mvn test\"}")
+                        : finalResponse("managed result accepted"))) {
+            KimiToolCallingClient client = (KimiToolCallingClient) newClient(
+                    server.baseUrl(), new TestChatMemory(), 5,
+                    request -> "unused", request -> {
+                        legacyExecutions.incrementAndGet();
+                        return "legacy result";
+                    }, request -> "unused"
+            );
+            AgentExecutionObserver managedObserver = new AgentExecutionObserver() {
+                @Override
+                public com.hkdzagent.agent.loop.AgentObservation executeTool(
+                        int step,
+                        String toolCallId,
+                        String toolName,
+                        String arguments
+                ) {
+                    executedToolCallId.set(toolCallId);
+                    return new com.hkdzagent.agent.loop.AgentObservation(
+                            toolName, "pipeline result", true);
+                }
+            };
+
+            com.hkdzagent.agent.loop.AgentLoopResult result = client.runWithTools(
+                    "Run tests", "managed-session", "managed-trace", managedObserver);
+
+            assertThat(result.status())
+                    .isEqualTo(com.hkdzagent.agent.loop.AgentLoopResult.Status.COMPLETED);
+            assertThat(result.finalAnswer()).isEqualTo("managed result accepted");
+            assertThat(executedToolCallId).hasValue("call_1");
+            assertThat(legacyExecutions).hasValue(0);
+            assertThat(firstToolMessage(readRequest(requestBodies, 1)).path("content").asText())
+                    .isEqualTo("pipeline result");
+        }
+    }
+
+    @Test
     void pausesBeforeSensitiveToolAndResumesFromDurableCheckpoint() throws Exception {
         List<String> requestBodies = new ArrayList<>();
         AtomicInteger commandExecutions = new AtomicInteger();
         AtomicReference<String> checkpoint = new AtomicReference<>();
+        AtomicReference<String> assessedToolCallId = new AtomicReference<>();
 
         try (MockOpenAiServer server = MockOpenAiServer.start(requestBodies, requestIndex ->
                 requestIndex == 1
@@ -283,7 +330,10 @@ class KimiToolCallingClientTest {
             );
             AgentExecutionObserver approvalGate = new AgentExecutionObserver() {
                 @Override
-                public boolean requiresApproval(int step, String toolName, String arguments) {
+                public boolean requiresApproval(
+                        int step, String toolCallId, String toolName, String arguments
+                ) {
+                    assessedToolCallId.set(toolCallId);
                     return "commandExecuteTool".equals(toolName);
                 }
 
@@ -301,15 +351,19 @@ class KimiToolCallingClientTest {
             assertThat(paused.status())
                     .isEqualTo(com.hkdzagent.agent.loop.AgentLoopResult.Status.WAITING_APPROVAL);
             assertThat(commandExecutions).hasValue(0);
+            assertThat(assessedToolCallId).hasValue("call_1");
             assertThat(checkpoint.get()).contains("commandExecuteTool", "trace-approval", "assistantMessage");
 
             com.hkdzagent.agent.loop.AgentLoopResult resumed = client.resumeWithApprovedTool(
-                    checkpoint.get(), AgentExecutionObserver.NOOP);
+                    checkpoint.get(),
+                    new com.hkdzagent.agent.loop.AgentObservation(
+                            "commandExecuteTool", "tests passed", true),
+                    AgentExecutionObserver.NOOP);
 
             assertThat(resumed.status())
                     .isEqualTo(com.hkdzagent.agent.loop.AgentLoopResult.Status.COMPLETED);
             assertThat(resumed.finalAnswer()).isEqualTo("command completed");
-            assertThat(commandExecutions).hasValue(1);
+            assertThat(commandExecutions).hasValue(0);
             assertThat(firstToolMessage(readRequest(requestBodies, 1)).path("content").asText())
                     .isEqualTo("tests passed");
         }

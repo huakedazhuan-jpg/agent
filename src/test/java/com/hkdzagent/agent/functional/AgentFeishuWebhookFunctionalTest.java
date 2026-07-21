@@ -1,6 +1,6 @@
 package com.hkdzagent.agent.functional;
 
-import com.hkdzagent.agent.ai.LLMClient;
+import com.hkdzagent.agent.audit.AdminAuditRepository;
 import com.hkdzagent.agent.im.FeishuAsyncConfig;
 import com.hkdzagent.agent.im.FeishuEventInboxService;
 import com.hkdzagent.agent.im.FeishuEventProcessor;
@@ -10,6 +10,9 @@ import com.hkdzagent.agent.im.FeishuSignatureVerifier;
 import com.hkdzagent.agent.im.FeishuWebhookController;
 import com.hkdzagent.agent.memory.OwnedConversationId;
 import com.hkdzagent.agent.security.ActorIdentity;
+import com.hkdzagent.agent.runtime.AgentRun;
+import com.hkdzagent.agent.runtime.AgentRunCoordinator;
+import com.hkdzagent.agent.runtime.AgentRunStatus;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -21,6 +24,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.context.TestPropertySource;
 
 import static org.mockito.Mockito.never;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -50,10 +55,13 @@ class AgentFeishuWebhookFunctionalTest {
     private MockMvc mockMvc;
 
     @MockitoBean
-    private LLMClient llmClient;
+    private AgentRunCoordinator runCoordinator;
 
     @MockitoBean
     private FeishuReplyClient feishuReplyClient;
+
+    @MockitoBean
+    private AdminAuditRepository adminAuditRepository;
 
     @Test
     void urlVerificationReturnsChallengeWithoutCallingAgentOrFeishuReplyApi() throws Exception {
@@ -69,7 +77,7 @@ class AgentFeishuWebhookFunctionalTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.challenge").value("challenge-token"));
 
-        verifyNoInteractions(llmClient, feishuReplyClient);
+        verifyNoInteractions(runCoordinator, feishuReplyClient);
     }
 
     @Test
@@ -83,12 +91,20 @@ class AgentFeishuWebhookFunctionalTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value(401));
 
-        verifyNoInteractions(llmClient, feishuReplyClient);
+        verifyNoInteractions(runCoordinator, feishuReplyClient);
     }
 
     @Test
     void ignoresDuplicateMessageEvents() throws Exception {
-        when(llmClient.askWithTools("hello", conversationId("open_1"))).thenReturn("answer");
+        AgentRun completed = mock(AgentRun.class);
+        when(completed.status()).thenReturn(AgentRunStatus.COMPLETED);
+        when(completed.finalAnswer()).thenReturn("answer");
+        when(runCoordinator.execute(
+                eq(ActorIdentity.feishu("open_1")),
+                eq("open_1"),
+                eq(conversationId("open_1")),
+                eq("hello"),
+                eq("feishu"))).thenReturn(completed);
         String payload = messageEvent("event-duplicate", "message-duplicate", "hello");
 
         mockMvc.perform(post("/api/feishu/webhook")
@@ -103,13 +119,20 @@ class AgentFeishuWebhookFunctionalTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0));
 
-        verify(llmClient, timeout(1000).times(1)).askWithTools("hello", conversationId("open_1"));
-        verify(feishuReplyClient, timeout(1000).times(1)).replyText("open_1", "answer");
+        verify(runCoordinator, timeout(1000).times(1)).execute(
+                ActorIdentity.feishu("open_1"), "open_1",
+                conversationId("open_1"), "hello", "feishu");
+        verifyNoInteractions(feishuReplyClient);
     }
 
     @Test
     void sendsUserSafeErrorReplyWhenAgentProcessingFails() throws Exception {
-        when(llmClient.askWithTools("hello", conversationId("open_1")))
+        when(runCoordinator.execute(
+                eq(ActorIdentity.feishu("open_1")),
+                eq("open_1"),
+                eq(conversationId("open_1")),
+                eq("hello"),
+                eq("feishu")))
                 .thenThrow(new IllegalStateException("model exploded"));
 
         mockMvc.perform(post("/api/feishu/webhook")

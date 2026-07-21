@@ -10,6 +10,8 @@ class ProductionConfigurationValidatorTest {
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
             .withPropertyValues("agent.runtime.repository=jdbc")
+            .withPropertyValues("feishu.outbox.repository=jdbc")
+            .withPropertyValues("agent.audit.repository=jdbc")
             .withBean(ProductionConfigurationValidator.class);
 
     @Test
@@ -316,6 +318,30 @@ class ProductionConfigurationValidatorTest {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure())
                             .hasRootCauseMessage("Unsafe production configuration: agent.security.enabled must be true in prod");
+                });
+    }
+
+    @Test
+    void failsFastWhenProductionUsesInMemoryFeishuOutboxRepository() {
+        contextRunner
+                .withPropertyValues(safeProductionProperties())
+                .withPropertyValues("feishu.outbox.repository=memory")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasRootCauseMessage("Unsafe production configuration: feishu.outbox.repository must be jdbc in prod");
+                });
+    }
+
+    @Test
+    void failsFastWhenProductionUsesInMemoryAdminAuditRepository() {
+        contextRunner
+                .withPropertyValues(safeProductionProperties())
+                .withPropertyValues("agent.audit.repository=memory")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasRootCauseMessage("Unsafe production configuration: agent.audit.repository must be jdbc in prod");
                 });
     }
 

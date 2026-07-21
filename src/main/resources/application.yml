@@ -51,10 +51,19 @@ feishu:
     processing-timeout: ${FEISHU_INBOX_PROCESSING_TIMEOUT:5m}
     poll-interval: ${FEISHU_INBOX_POLL_INTERVAL:30s}
     poll-batch-size: ${FEISHU_INBOX_POLL_BATCH_SIZE:20}
+  outbox:
+    repository: ${FEISHU_OUTBOX_REPOSITORY:memory}
+    max-attempts: ${FEISHU_OUTBOX_MAX_ATTEMPTS:5}
+    retry-delay: ${FEISHU_OUTBOX_RETRY_DELAY:30s}
+    processing-timeout: ${FEISHU_OUTBOX_PROCESSING_TIMEOUT:5m}
+    poll-interval: ${FEISHU_OUTBOX_POLL_INTERVAL:5s}
+    poll-batch-size: ${FEISHU_OUTBOX_POLL_BATCH_SIZE:20}
 
 tavily:
   api-key: ${TAVILY_API_KEY}
 agent:
+  audit:
+    repository: ${AGENT_AUDIT_REPOSITORY:memory}
   runtime:
     repository: ${AGENT_RUNTIME_REPOSITORY:memory}
     max-steps: ${AGENT_RUNTIME_MAX_STEPS:5}
@@ -102,3 +111,12 @@ agent:
         connect-timeout: 2s
         read-timeout: 5s
         max-response-bytes: 8192
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: never

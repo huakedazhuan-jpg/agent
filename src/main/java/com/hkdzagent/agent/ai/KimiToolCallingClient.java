@@ -183,6 +183,7 @@ public class KimiToolCallingClient {
 
     public AgentLoopResult resumeWithApprovedTool(
             String checkpointJson,
+            AgentObservation approvedObservation,
             AgentExecutionObserver observer
     ) {
         try {
@@ -198,13 +199,18 @@ public class KimiToolCallingClient {
             String toolName = toolCall.path("function").path("name").asText();
             String arguments = toolCall.path("function").path("arguments").asText("{}");
             AgentExecutionObserver safeObserver = observer == null ? AgentExecutionObserver.NOOP : observer;
+            if (approvedObservation == null
+                    || !toolName.equals(approvedObservation.toolName())) {
+                throw new SecurityException(
+                        "approved tool observation does not match checkpoint tool call");
+            }
 
             safeObserver.toolStarted(approvedStep, toolName);
-            AgentObservation observation = executeAgentTool(new AgentToolCall(toolName, arguments));
             safeObserver.toolCompleted(
-                    approvedStep, toolName, observation.success(), observation.content());
+                    approvedStep, toolName,
+                    approvedObservation.success(), approvedObservation.content());
             messages.add(assistantMessageForNextRequest(assistantMessage));
-            messages.add(toolResultMessage(toolCall, observation.content()));
+            messages.add(toolResultMessage(toolCall, approvedObservation.content()));
 
             AgentLoopService loop = agentLoopService(
                     messages, userMessage, conversationId, safeObserver);
@@ -230,10 +236,18 @@ public class KimiToolCallingClient {
                 turn -> nextDecision(messages, userMessage, conversationId, pendingAssistantMessage, pendingToolCall,
                         addedObservationCount, observer, turn),
                 (traceId, toolCall) -> {
-                    observer.toolStarted(addedObservationCount.get() + 1, toolCall.name());
-                    AgentObservation observation = executeAgentTool(toolCall);
+                    int step = addedObservationCount.get() + 1;
+                    String toolCallId = pendingToolCall.get() == null
+                            ? ""
+                            : pendingToolCall.get().path("id").asText();
+                    observer.toolStarted(step, toolCall.name());
+                    AgentObservation observation = observer.executeTool(
+                            step, toolCallId, toolCall.name(), toolCall.arguments());
+                    if (observation == null) {
+                        observation = executeAgentTool(toolCall);
+                    }
                     observer.toolCompleted(
-                            addedObservationCount.get() + 1,
+                            step,
                             toolCall.name(),
                             observation.success(),
                             observation.content()
@@ -272,8 +286,9 @@ public class KimiToolCallingClient {
         pendingToolCall.set(toolCall);
         String toolName = toolCall.path("function").path("name").asText();
         String arguments = toolCall.path("function").path("arguments").asText("{}");
-        observer.toolCallRequested(turn.step(), toolName, arguments);
-        if (observer.requiresApproval(turn.step(), toolName, arguments)) {
+        String toolCallId = toolCall.path("id").asText();
+        observer.toolCallRequested(turn.step(), toolCallId, toolName, arguments);
+        if (observer.requiresApproval(turn.step(), toolCallId, toolName, arguments)) {
             String checkpoint = approvalCheckpoint(
                     messages,
                     userMessage,
@@ -283,7 +298,7 @@ public class KimiToolCallingClient {
                     assistantMessage,
                     toolCall
             );
-            observer.approvalRequired(turn.step(), toolName, arguments, checkpoint);
+            observer.approvalRequired(turn.step(), toolCallId, toolName, arguments, checkpoint);
             throw new AgentLoopPausedException("agent is waiting for tool approval");
         }
         return AgentDecision.toolCall(new AgentToolCall(toolName, arguments));

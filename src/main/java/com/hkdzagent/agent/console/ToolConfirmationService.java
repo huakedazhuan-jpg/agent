@@ -2,6 +2,9 @@ package com.hkdzagent.agent.console;
 
 import com.hkdzagent.agent.trace.AgentTraceSanitizer;
 import com.hkdzagent.agent.security.ActorIdentity;
+import com.hkdzagent.agent.tool.ValidatedToolInvocation;
+import com.hkdzagent.agent.tool.ToolInvocationContext;
+import com.hkdzagent.agent.tool.ToolPipelineResult;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -104,6 +107,69 @@ public class ToolConfirmationService {
         ));
     }
 
+    public ToolConfirmation requestConfirmationForInvocation(
+            String sessionId,
+            ValidatedToolInvocation<?, ?> invocation
+    ) {
+        Instant createdAt = clock.instant();
+        return repository.save(new ToolConfirmation(
+                UUID.randomUUID().toString(),
+                invocation.context().ownerKey(),
+                normalize(sessionId),
+                invocation.context().traceId(),
+                invocation.context().runId(),
+                invocation.metadata().name(),
+                invocation.metadata().version(),
+                invocation.context().toolCallId(),
+                invocation.argumentsHash(),
+                invocation.argumentsPreview(),
+                ToolConfirmation.Status.PENDING,
+                null,
+                createdAt,
+                createdAt.plus(ttl),
+                null
+        ));
+    }
+
+    public ToolConfirmation requestConfirmationForAssessment(
+            String sessionId,
+            ToolInvocationContext context,
+            ToolPipelineResult assessment
+    ) {
+        if (context == null) {
+            throw new IllegalArgumentException("tool invocation context is required");
+        }
+        if (assessment == null
+                || assessment.status() != ToolPipelineResult.Status.APPROVAL_REQUIRED) {
+            throw new IllegalArgumentException("approval-required tool assessment is required");
+        }
+        if (assessment.toolName() == null || assessment.toolName().isBlank()
+                || assessment.toolVersion() == null || assessment.toolVersion().isBlank()
+                || assessment.argumentsHash() == null
+                || !assessment.argumentsHash().matches("[0-9a-f]{64}")) {
+            throw new IllegalArgumentException("tool assessment binding is incomplete");
+        }
+
+        Instant createdAt = clock.instant();
+        return repository.save(new ToolConfirmation(
+                UUID.randomUUID().toString(),
+                context.ownerKey(),
+                normalize(sessionId),
+                context.traceId(),
+                context.runId(),
+                assessment.toolName(),
+                assessment.toolVersion(),
+                context.toolCallId(),
+                assessment.argumentsHash(),
+                assessment.argumentsPreview() == null ? "{}" : assessment.argumentsPreview(),
+                ToolConfirmation.Status.PENDING,
+                null,
+                createdAt,
+                createdAt.plus(ttl),
+                null
+        ));
+    }
+
     public List<ToolConfirmation> findPendingBySessionId(ActorIdentity owner, String sessionId) {
         repository.expirePendingBefore(clock.instant());
         return repository.findPendingByOwnerAndSessionId(owner.key(), normalize(sessionId));
@@ -122,9 +188,38 @@ public class ToolConfirmationService {
         return decide(confirmationId, ToolConfirmation.Status.APPROVED, "approved");
     }
 
+    public ToolConfirmation approve(
+            ActorIdentity owner,
+            String confirmationId,
+            String expectedArgumentsHash
+    ) {
+        ToolConfirmation confirmation = requireBoundApproval(owner, confirmationId, expectedArgumentsHash);
+        return decide(confirmation.id(), ToolConfirmation.Status.APPROVED, "approved");
+    }
+
     public ToolConfirmation reject(String confirmationId, String reason) {
         String normalizedReason = reason == null || reason.isBlank() ? "rejected" : reason;
         return decide(confirmationId, ToolConfirmation.Status.REJECTED, normalizedReason);
+    }
+
+    private ToolConfirmation requireBoundApproval(
+            ActorIdentity owner,
+            String confirmationId,
+            String expectedArgumentsHash
+    ) {
+        repository.expirePendingBefore(clock.instant());
+        ToolConfirmation confirmation = repository.findById(confirmationId);
+        if (confirmation == null) {
+            throw new IllegalArgumentException("confirmation not found: " + confirmationId);
+        }
+        if (owner == null || !confirmation.ownerKey().equals(owner.key())) {
+            throw new SecurityException("tool approval owner does not match");
+        }
+        if (expectedArgumentsHash == null
+                || !confirmation.argumentsHash().equals(expectedArgumentsHash)) {
+            throw new SecurityException("tool approval arguments hash does not match");
+        }
+        return confirmation;
     }
 
     private ToolConfirmation decide(

@@ -108,11 +108,14 @@ public class SecurityConfiguration {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/", "/index.html", "/favicon.ico", "/error").permitAll()
+                        .requestMatchers("/actuator/health", "/actuator/info").permitAll()
+                        .requestMatchers("/actuator/metrics", "/actuator/metrics/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.POST, "/api/auth/login", "/api/feishu/webhook").permitAll()
                         .requestMatchers("/api/auth/me").authenticated()
                         .requestMatchers(HttpMethod.POST,
                                 "/api/agent/tool-confirmations/*/approve",
                                 "/api/agent/tool-confirmations/*/reject").hasRole("ADMIN")
+                        .requestMatchers("/api/agent/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/agent/**").authenticated()
                         .requestMatchers("/test/**").hasRole("ADMIN")
                         .anyRequest().denyAll())

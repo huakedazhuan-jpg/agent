@@ -1,10 +1,21 @@
 package com.hkdzagent.agent.tool;
 
 import java.nio.charset.Charset;
+import java.time.Duration;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 
-public class CommandExecuteTool {
+public class CommandExecuteTool implements AgentTool<CommandRequest, ToolResult> {
+
+    private static final ToolMetadata METADATA = new ToolMetadata(
+            "commandExecuteTool",
+            "1.0.0",
+            "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}},\"required\":[\"command\"],\"additionalProperties\":false}",
+            ToolRiskLevel.CRITICAL,
+            ToolApprovalPolicy.ALWAYS,
+            Duration.ofSeconds(10),
+            ToolRetryPolicy.none()
+    );
 
     private final ToolPermissionService permissionService;
 
@@ -12,6 +23,17 @@ public class CommandExecuteTool {
         this.permissionService = permissionService;
     }
 
+    @Override
+    public ToolMetadata metadata() {
+        return METADATA;
+    }
+
+    @Override
+    public Class<CommandRequest> inputType() {
+        return CommandRequest.class;
+    }
+
+    @Override
     public ToolResult execute(CommandRequest request) throws Exception {
         String command = permissionService.normalizeCommand(request.command());
         if (!permissionService.isCommandAllowed(command)) {

@@ -11,6 +11,8 @@ import com.hkdzagent.agent.trace.AgentTraceSanitizer;
 import com.hkdzagent.agent.trace.InMemoryAgentTraceRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hkdzagent.agent.runtime.AgentRun;
+import com.hkdzagent.agent.runtime.AgentRunCoordinator;
+import com.hkdzagent.agent.runtime.AgentRunStatus;
 import com.hkdzagent.agent.runtime.AgentRuntimeProperties;
 import com.hkdzagent.agent.runtime.AgentRuntimeService;
 import com.hkdzagent.agent.runtime.InMemoryAgentRunRepository;
@@ -35,6 +37,11 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -75,8 +82,26 @@ class ObjectAuthorizationFunctionalTest {
     @MockitoBean
     private LLMClient llmClient;
 
+    @MockitoBean
+    private AgentRunCoordinator runCoordinator;
+
     @Test
     void sameClientSessionIdIsNamespacedByAuthenticatedUser() throws Exception {
+        AgentRun firstRun = mock(AgentRun.class);
+        when(firstRun.status()).thenReturn(AgentRunStatus.COMPLETED);
+        when(firstRun.finalAnswer()).thenReturn("first answer");
+        AgentRun secondRun = mock(AgentRun.class);
+        when(secondRun.status()).thenReturn(AgentRunStatus.COMPLETED);
+        when(secondRun.finalAnswer()).thenReturn("second answer");
+        when(runCoordinator.execute(
+                eq(ActorIdentity.user(USER_A)), eq("shared-session"),
+                anyString(), eq("first"), eq("http-chat")))
+                .thenReturn(firstRun);
+        when(runCoordinator.execute(
+                eq(ActorIdentity.user(USER_B)), eq("shared-session"),
+                anyString(), eq("second"), eq("http-chat")))
+                .thenReturn(secondRun);
+
         mockMvc.perform(post("/api/agent/chat")
                         .with(userJwt(USER_A))
                         .contentType(MediaType.APPLICATION_JSON)
@@ -93,10 +118,9 @@ class ObjectAuthorizationFunctionalTest {
                 .andExpect(status().isOk());
 
         ArgumentCaptor<String> conversationIds = ArgumentCaptor.forClass(String.class);
-        verify(llmClient, times(2)).askWithTools(
-                org.mockito.ArgumentMatchers.anyString(),
-                conversationIds.capture()
-        );
+        verify(runCoordinator, times(2)).execute(
+                any(ActorIdentity.class), eq("shared-session"),
+                conversationIds.capture(), anyString(), eq("http-chat"));
         OwnedConversationId first = OwnedConversationId.decode(conversationIds.getAllValues().get(0));
         OwnedConversationId second = OwnedConversationId.decode(conversationIds.getAllValues().get(1));
 

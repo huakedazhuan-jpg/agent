@@ -2,6 +2,8 @@ package com.hkdzagent.agent.tool;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonPropertyDescription;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hkdzagent.agent.console.ToolConfirmationProperties;
 import com.hkdzagent.agent.rag.KnowledgeSearchTool;
 import com.hkdzagent.agent.rag.LocalKnowledgeBase;
 import com.hkdzagent.agent.rag.RagProperties;
@@ -12,6 +14,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Description;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.function.Function;
 
 @Configuration
@@ -28,6 +31,7 @@ public class ToolRegistryConfig {
     private final HttpRequestTool httpTool;
     private final WebSearchTool searchTool;
     private final KnowledgeSearchTool knowledgeSearchTool;
+    private final AgentToolRegistry agentToolRegistry;
 
     @Autowired
     public ToolRegistryConfig(
@@ -56,7 +60,55 @@ public class ToolRegistryConfig {
         this.commandTool = new CommandExecuteTool(permissionService);
         this.httpTool = new HttpRequestTool(permissionService);
         this.searchTool = new WebSearchTool(tavilyApiKey);
+        this.agentToolRegistry = new AgentToolRegistry(List.of(
+                fileTool,
+                commandTool,
+                httpTool,
+                searchTool
+        ));
         this.knowledgeSearchTool = new KnowledgeSearchTool(new LocalKnowledgeBase(ragIndexFile));
+    }
+
+    @Bean
+    public AgentToolRegistry agentToolRegistry() {
+        return agentToolRegistry;
+    }
+
+    @Bean
+    public ToolInvocationValidator toolInvocationValidator(
+            AgentToolRegistry registry,
+            ObjectMapper objectMapper
+    ) {
+        return new ToolInvocationValidator(registry, objectMapper, 160);
+    }
+
+    @Bean
+    public ToolAccessPolicy toolAccessPolicy() {
+        return ToolAccessPolicy.allowAuthenticated();
+    }
+
+    @Bean
+    public ToolApprovalCondition toolApprovalCondition(
+            ToolConfirmationProperties confirmationProperties
+    ) {
+        return invocation -> confirmationProperties.requiresApproval(
+                invocation.metadata().name());
+    }
+
+    @Bean
+    public ToolPolicyEngine toolPolicyEngine(
+            ToolAccessPolicy accessPolicy,
+            ToolApprovalCondition approvalCondition
+    ) {
+        return new ToolPolicyEngine(accessPolicy, approvalCondition);
+    }
+
+    @Bean
+    public ToolExecutionPipeline toolExecutionPipeline(
+            ToolInvocationValidator validator,
+            ToolPolicyEngine policyEngine
+    ) {
+        return new ToolExecutionPipeline(validator, policyEngine);
     }
 
     public record FileRequest(

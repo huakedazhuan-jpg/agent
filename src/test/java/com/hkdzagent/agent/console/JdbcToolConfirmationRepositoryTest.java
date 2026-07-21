@@ -34,6 +34,8 @@ class JdbcToolConfirmationRepositoryTest {
                     trace_id VARCHAR(128),
                     run_id UUID,
                     tool_name VARCHAR(128) NOT NULL,
+                    tool_version VARCHAR(64) NOT NULL,
+                    tool_call_id VARCHAR(128),
                     request_hash VARCHAR(128) NOT NULL,
                     request_payload JSON NOT NULL,
                     arguments_preview CLOB NOT NULL,
@@ -142,6 +144,30 @@ class JdbcToolConfirmationRepositoryTest {
                 .containsExactly(userA);
         assertThat(repository.findPendingByOwnerAndSessionId("user:b", "shared-session"))
                 .containsExactly(userB);
+    }
+
+    @Test
+    void persistsInvocationBindingInsteadOfRehashingTheDisplayPreview() {
+        String argumentsHash = "a".repeat(64);
+        ToolConfirmation bound = new ToolConfirmation(
+                UUID.randomUUID().toString(), "user:test", "session-bound", "trace-bound",
+                "550e8400-e29b-41d4-a716-446655440000", "commandExecuteTool",
+                "2.1.0", "call-42", argumentsHash, "{\"command\":\"[redacted]\"}",
+                ToolConfirmation.Status.PENDING, null,
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:15:00Z"), null
+        );
+
+        repository.save(bound);
+
+        assertThat(repository.findById(bound.id())).isEqualTo(bound);
+        String storedHash = jdbcTemplate.queryForObject(
+                "SELECT request_hash FROM tool_approvals WHERE id = :id",
+                new org.springframework.jdbc.core.namedparam.MapSqlParameterSource(
+                        "id", UUID.fromString(bound.id())),
+                String.class
+        );
+        assertThat(storedHash).isEqualTo(argumentsHash);
     }
 
     private ToolConfirmation confirmation(String sessionId, Instant createdAt, Instant expiresAt) {

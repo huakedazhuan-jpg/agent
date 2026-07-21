@@ -6,6 +6,8 @@ import com.hkdzagent.agent.trace.AgentTraceRecorder;
 import com.hkdzagent.agent.trace.AgentTraceSanitizer;
 import com.hkdzagent.agent.console.ToolConfirmationProperties;
 import com.hkdzagent.agent.console.ToolConfirmationService;
+import com.hkdzagent.agent.tool.ToolExecutionPipeline;
+import com.hkdzagent.agent.im.FeishuResultOutboxService;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -55,20 +57,38 @@ public class AgentRuntimeConfig {
             AgentTraceRecorder traceRecorder,
             AgentTraceSanitizer sanitizer,
             AgentApprovalPauseService approvalPauseService,
-            ToolConfirmationProperties confirmationProperties
+            ToolConfirmationProperties confirmationProperties,
+            ToolExecutionPipeline toolExecutionPipeline,
+            ApprovedToolExecutionService approvedToolExecutionService,
+            AgentCompletionService completionService,
+            AgentFailureService failureService
     ) {
         return new AgentRuntimeExecutor(
                 runtimeService, llmClient, traceRecorder, sanitizer,
-                approvalPauseService, confirmationProperties);
+                approvalPauseService, confirmationProperties, toolExecutionPipeline,
+                approvedToolExecutionService, completionService, failureService);
+    }
+
+    @Bean
+    public ApprovedToolExecutionService approvedToolExecutionService(
+            ToolConfirmationService confirmationService,
+            ToolExecutionPipeline toolExecutionPipeline,
+            ObjectMapper objectMapper
+    ) {
+        return new ApprovedToolExecutionService(
+                confirmationService, toolExecutionPipeline, objectMapper);
     }
 
     @Bean
     public AgentApprovalPauseService agentApprovalPauseService(
             ToolConfirmationService confirmationService,
             AgentRuntimeService runtimeService,
-            AgentTraceSanitizer sanitizer
+            AgentTraceSanitizer sanitizer,
+            ObjectMapper objectMapper,
+            FeishuResultOutboxService outboxService
     ) {
-        return new AgentApprovalPauseService(confirmationService, runtimeService, sanitizer);
+        return new AgentApprovalPauseService(
+                confirmationService, runtimeService, sanitizer, objectMapper, outboxService);
     }
 
     @Bean(name = "agentRuntimeTaskExecutor")
@@ -89,11 +109,12 @@ public class AgentRuntimeConfig {
             AgentRuntimeService runtimeService,
             AgentRuntimeExecutor runtimeExecutor,
             AgentTraceRecorder traceRecorder,
+            AgentFailureService failureService,
             @Qualifier("agentRuntimeTaskExecutor") Executor executor
     ) {
         return new AgentApprovalOrchestrator(
                 confirmationService, confirmationRepository, runtimeService,
-                runtimeExecutor, traceRecorder, executor);
+                runtimeExecutor, traceRecorder, failureService, executor);
     }
 
     @Bean
@@ -101,5 +122,30 @@ public class AgentRuntimeConfig {
             AgentApprovalOrchestrator orchestrator
     ) {
         return new AgentApprovalRecoveryScheduler(orchestrator);
+    }
+
+    @Bean
+    public AgentRunCoordinator agentRunCoordinator(
+            AgentRuntimeService runtimeService,
+            AgentRuntimeExecutor runtimeExecutor,
+            AgentTraceRecorder traceRecorder
+    ) {
+        return new AgentRunCoordinator(runtimeService, runtimeExecutor, traceRecorder);
+    }
+
+    @Bean
+    public AgentCompletionService agentCompletionService(
+            AgentRuntimeService runtimeService,
+            FeishuResultOutboxService outboxService
+    ) {
+        return new AgentCompletionService(runtimeService, outboxService);
+    }
+
+    @Bean
+    public AgentFailureService agentFailureService(
+            AgentRuntimeService runtimeService,
+            FeishuResultOutboxService outboxService
+    ) {
+        return new AgentFailureService(runtimeService, outboxService);
     }
 }

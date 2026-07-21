@@ -5,7 +5,6 @@ import com.hkdzagent.agent.console.ToolConfirmationRepository;
 import com.hkdzagent.agent.console.ToolConfirmationService;
 import com.hkdzagent.agent.trace.AgentTraceRecorder;
 
-import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executor;
 
@@ -16,6 +15,7 @@ public class AgentApprovalOrchestrator {
     private final AgentRuntimeService runtimeService;
     private final AgentRuntimeExecutor runtimeExecutor;
     private final AgentTraceRecorder traceRecorder;
+    private final AgentFailureService failureService;
     private final Executor executor;
 
     public AgentApprovalOrchestrator(
@@ -26,11 +26,25 @@ public class AgentApprovalOrchestrator {
             AgentTraceRecorder traceRecorder,
             Executor executor
     ) {
+        this(confirmationService, confirmationRepository, runtimeService,
+                runtimeExecutor, traceRecorder, null, executor);
+    }
+
+    public AgentApprovalOrchestrator(
+            ToolConfirmationService confirmationService,
+            ToolConfirmationRepository confirmationRepository,
+            AgentRuntimeService runtimeService,
+            AgentRuntimeExecutor runtimeExecutor,
+            AgentTraceRecorder traceRecorder,
+            AgentFailureService failureService,
+            Executor executor
+    ) {
         this.confirmationService = confirmationService;
         this.confirmationRepository = confirmationRepository;
         this.runtimeService = runtimeService;
         this.runtimeExecutor = runtimeExecutor;
         this.traceRecorder = traceRecorder;
+        this.failureService = failureService;
         this.executor = executor;
     }
 
@@ -84,14 +98,21 @@ public class AgentApprovalOrchestrator {
                 ? "tool approval rejected"
                 : confirmation.decisionReason();
         try {
-            runtimeService.rejectApproval(run.runId(), confirmation.id(), reason);
-            runtimeService.appendEvent(run.runId(), AgentRunEventType.RUN_FAILED, Map.of(
-                    "error", reason,
-                    "approvalId", confirmation.id()
-            ));
+            if (failureService == null) {
+                runtimeService.rejectApproval(run.runId(), confirmation.id(), reason);
+                runtimeService.appendEvent(run.runId(), AgentRunEventType.RUN_FAILED,
+                        java.util.Map.of("error", reason, "approvalId", confirmation.id()));
+            } else {
+                failureService.rejectApproval(
+                        run.runId(), confirmation.id(), reason);
+            }
             traceRecorder.recordError(run.traceId(), run.currentStep(), reason, null);
             traceRecorder.finishTrace(run.traceId(), "FAILED");
-        } catch (IllegalStateException ignored) {
+        } catch (IllegalStateException exception) {
+            AgentRun latest = runtimeService.find(run.runId());
+            if (isWaitingFor(latest, confirmation.id())) {
+                throw exception;
+            }
             // Another instance already applied this durable decision.
         }
     }
