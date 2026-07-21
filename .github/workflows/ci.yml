@@ -43,3 +43,69 @@ jobs:
 
       - name: Package backend application
         run: ./mvnw -B --no-transfer-progress -DskipTests package
+
+  postgres-runtime:
+    name: PostgreSQL runtime integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RUN_POSTGRES_INTEGRATION_TESTS: "true"
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: xingclaw_agent
+      POSTGRES_USER: xingclaw_agent
+      POSTGRES_PASSWORD: xingclaw-ci-password
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: xingclaw_agent
+          POSTGRES_USER: xingclaw_agent
+          POSTGRES_PASSWORD: xingclaw-ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U xingclaw_agent -d xingclaw_agent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Verify migrations and repository recovery
+        run: ./mvnw -B --no-transfer-progress -Dtest=RealPostgresAgentRuntimeIntegrationTest test
+
+      - name: Seed runtime state before PostgreSQL restart
+        env:
+          POSTGRES_RECOVERY_PHASE: seed
+        run: ./mvnw -B --no-transfer-progress -Dtest=RealPostgresContainerRestartRecoveryTest test
+
+      - name: Restart PostgreSQL service process
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: |
+          docker restart "$POSTGRES_CONTAINER_ID"
+          for attempt in {1..30}; do
+            status="$(docker inspect --format='{{.State.Health.Status}}' "$POSTGRES_CONTAINER_ID")"
+            if [ "$status" = "healthy" ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs "$POSTGRES_CONTAINER_ID"
+          exit 1
+
+      - name: Verify runtime recovery after PostgreSQL restart
+        env:
+          POSTGRES_RECOVERY_PHASE: verify
+        run: ./mvnw -B --no-transfer-progress -Dtest=RealPostgresContainerRestartRecoveryTest test

@@ -58,16 +58,18 @@ class InfrastructureConfigurationTest {
 
         assertThat(compose).contains(
                 "postgres:",
-                "image: postgres:18-alpine",
+                "image: postgres:17-alpine",
                 "pg_isready",
                 "redis:",
                 "image: redis:8-alpine",
                 "redis-server",
                 "--requirepass",
                 "healthcheck:",
-                "postgres-data:",
+                "postgres17-data:",
                 "redis-data:"
         );
+        assertThat(compose).contains("postgres17-data:/var/lib/postgresql/data");
+        assertThat(compose).doesNotContain("image: postgres:18-alpine");
     }
 
     @Test
@@ -219,6 +221,73 @@ class InfrastructureConfigurationTest {
     }
 
     @Test
+    void ninthFlywayMigrationBindsApprovalsToExactToolInvocations() throws IOException {
+        Path migration = PROJECT_ROOT.resolve(
+                "src/main/resources/db/migration/postgresql/V9__bind_tool_approvals_to_invocations.sql"
+        );
+        String sql = Files.readString(migration);
+
+        assertThat(sql).contains(
+                "ADD COLUMN tool_version",
+                "ADD COLUMN tool_call_id",
+                "ix_tool_approvals_run_tool_call",
+                "run_id",
+                "tool_call_id"
+        );
+    }
+
+    @Test
+    void tenthFlywayMigrationCreatesDurableFeishuResultOutbox() throws IOException {
+        Path migration = PROJECT_ROOT.resolve(
+                "src/main/resources/db/migration/postgresql/V10__durable_feishu_result_outbox.sql"
+        );
+        String sql = Files.readString(migration);
+
+        assertThat(sql).contains(
+                "CREATE TABLE feishu_result_outbox",
+                "run_id UUID NOT NULL REFERENCES agent_runs",
+                "CONSTRAINT ux_feishu_result_outbox_run UNIQUE (run_id)",
+                "RETRYABLE",
+                "ix_feishu_result_outbox_delivery"
+        );
+    }
+
+    @Test
+    void eleventhFlywayMigrationCreatesAdminAuditEvents() throws IOException {
+        Path migration = PROJECT_ROOT.resolve(
+                "src/main/resources/db/migration/postgresql/V11__admin_audit_events.sql"
+        );
+        String sql = Files.readString(migration);
+
+        assertThat(sql).contains(
+                "CREATE TABLE admin_audit_events",
+                "actor_key VARCHAR(320) NOT NULL",
+                "resource_type",
+                "outcome IN ('SUCCEEDED', 'REJECTED', 'FAILED')",
+                "ix_admin_audit_events_resource"
+        );
+    }
+
+    @Test
+    void twelfthFlywayMigrationGeneralizesFeishuOutboxNotifications() throws IOException {
+        Path migration = PROJECT_ROOT.resolve(
+                "src/main/resources/db/migration/postgresql/V12__generalize_feishu_notification_outbox.sql"
+        );
+        String sql = Files.readString(migration);
+
+        assertThat(sql).contains(
+                "ADD COLUMN notification_type VARCHAR(32)",
+                "ADD COLUMN deduplication_key VARCHAR(512)",
+                "SET notification_type = 'FINAL_RESULT'",
+                "DROP CONSTRAINT ux_feishu_result_outbox_run",
+                "UNIQUE (deduplication_key)",
+                "APPROVAL_REQUIRED",
+                "RUN_FAILED",
+                "ix_feishu_result_outbox_run_type"
+        );
+    }
+
+    @Test
     void environmentTemplateDocumentsInfrastructureSettings() throws IOException {
         String envExample = Files.readString(PROJECT_ROOT.resolve(".env.example"));
 
@@ -233,8 +302,11 @@ class InfrastructureConfigurationTest {
                 "AGENT_TOOL_APPROVAL_REPOSITORY=memory",
                 "AGENT_TOOL_APPROVAL_TTL=15m",
                 "AGENT_MEMORY_REPOSITORY=file",
+                "AGENT_AUDIT_REPOSITORY=memory",
                 "FEISHU_INBOX_REPOSITORY=memory",
                 "FEISHU_INBOX_MAX_ATTEMPTS=3",
+                "FEISHU_OUTBOX_REPOSITORY=memory",
+                "FEISHU_OUTBOX_MAX_ATTEMPTS=5",
                 "AGENT_SECURITY_ENABLED=false",
                 "AGENT_SECURITY_USER_REPOSITORY=memory",
                 "AGENT_SECURITY_JWT_SECRET=",
@@ -244,17 +316,19 @@ class InfrastructureConfigurationTest {
     }
 
     @Test
-    void infrastructureDocumentationStatesThatBusinessStateIsNotFullyMigratedYet() throws IOException {
+    void infrastructureDocumentationMatchesCurrentDurabilityAndRecoveryBoundary() throws IOException {
         String document = Files.readString(PROJECT_ROOT.resolve("docs/infrastructure.md"));
 
         assertThat(document).contains(
                 "# Infrastructure",
                 "docker compose up -d postgres redis",
-                "Flyway is present but disabled by default",
-                "Agent trace can now use PostgreSQL",
-                "Chat memory can now use PostgreSQL",
-                "Tool approvals can now use PostgreSQL",
+                "PostgreSQL 17 for durable application state",
+                "Migrations V1-V12",
+                "Feishu notification outbox",
+                "Arbitrary abandoned `RUNNING` runs are not automatically rescheduled",
+                "Redis is present in the infrastructure baseline but is not used",
                 "Production must provide explicit database and Redis credentials"
         );
+        assertThat(document).doesNotContain("PostgreSQL 18 for durable application state");
     }
 }

@@ -54,8 +54,9 @@ class CiConfigurationTest {
                 "./mvnw -B --no-transfer-progress test",
                 "./mvnw -B --no-transfer-progress -DskipTests package",
                 "minimum merge gate",
+                "RealPostgresAgentRuntimeIntegrationTest",
                 "Not yet covered",
-                "PostgreSQL and Redis integration tests",
+                "Redis integration tests",
                 "Docker image build",
                 "Do not describe this project as having a complete CI/CD pipeline"
         );
