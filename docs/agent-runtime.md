@@ -28,7 +28,7 @@ Terminal states cannot transition again. `WAITING_APPROVAL` must reference a pen
 - final answer or sanitized error
 - worker lease and timestamps
 
-The checkpoint is intentionally opaque to the Runtime core. The Kimi adapter will serialize provider-specific messages and pending tool-call data without leaking that representation into the state machine API.
+The checkpoint is intentionally opaque to the Runtime core. The Kimi adapter serializes provider-specific messages and pending tool-call data without leaking that representation into the state machine API.
 
 ## Runtime events
 
@@ -49,6 +49,8 @@ Approval decisions retain their existing atomic pending-state update. Resuming a
 
 V8, the Runtime domain model, memory/JDBC repositories, worker leasing, optimistic state updates, ordered event append/replay, and the Runtime executor are implemented. The streaming chat endpoint now executes the Agent Loop through Runtime, persists model/tool lifecycle events, emits provider token deltas with durable SSE IDs, and exposes owner-scoped replay from a requested sequence.
 
-Sensitive tools are gated before execution. Runtime persists the provider checkpoint, enters `WAITING_APPROVAL`, and releases its worker lease. An approved decision conditionally resumes the matching run and executes the saved tool call once; rejection or expiry fails the run without tool execution. A recovery scheduler reconciles durable decisions after process restarts.
+Sensitive tools are gated before execution. Runtime persists the provider checkpoint, enters `WAITING_APPROVAL`, and releases its worker lease. An approved decision conditionally resumes the matching run and executes the saved tool call once; rejection or expiry fails the run without tool execution. A recovery scheduler reconciles durable decisions after process restarts. Approval-required, completed, and failed Feishu transitions enqueue notifications transactionally through a durable outbox.
 
-The non-streaming chat endpoint still uses the compatibility path. High-volume token-event batching and real PostgreSQL integration verification remain later hardening work.
+Both blocking and streaming chat endpoints execute through Runtime. Real PostgreSQL 17 migration, repository reconstruction, and database-process restart gates are implemented.
+
+The remaining Runtime boundary is explicit: there is no scanner that reschedules arbitrary abandoned `RUNNING` runs after their Worker lease expires, and Feishu inbox rows do not yet persist their created run ID. `CANCELLED` is represented in the state model but has no API or execution implementation. Provider checkpoints remain unencrypted, and high-volume token events are not batched.

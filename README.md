@@ -2,13 +2,13 @@
 
 XingClaw Agent is a Spring Boot AI agent system focused on durable execution, tool calling, human approval, multi-user isolation, and external-channel integration.
 
-The repository now contains a production-designed Agent Runtime with PostgreSQL persistence, real provider token streaming, resumable tool approval, JWT/RBAC, and owner-scoped resources. It is suitable as a resume project, but should not be described as production-deployed: real PostgreSQL restart drills, runtime checkpoint encryption, load testing, metrics, and deployment automation remain incomplete.
+The repository contains a production-designed Agent Runtime with PostgreSQL persistence, real provider token streaming, restart-recoverable tool approval, JWT/RBAC, owner-scoped resources, and durable Feishu notifications. Real PostgreSQL 17 migration and database-process restart gates are implemented. It is suitable as a resume project, but should not be described as production-deployed: general recovery of abandoned `RUNNING` runs, checkpoint encryption, load testing, complete observability, and deployment automation remain incomplete.
 
 ## Current Status
 
 - Backend tests pass with Maven Wrapper.
 - Local static console is available at `/`.
-- Durable Agent runs, ordered events, traces, tool approvals, chat memory, RAG, Feishu webhook processing, and tool-safety controls exist.
+- Durable Agent runs, ordered events, traces, tool approvals, chat memory, RAG, Feishu webhook processing, notification outbox delivery, and tool-safety controls exist.
 - Local secrets are loaded from `.env`, which is intentionally ignored by Git.
 - `.env.example` documents required local configuration keys.
 - The project has been initialized as a Git repository for staged production-hardening work.
@@ -33,7 +33,7 @@ Spring AI is pinned to the stable 1.1.x line because this project currently stay
 - Blocking chat API at `/api/agent/chat`
 - Console SSE endpoint at `/api/agent/chat/stream`
   - Reads real provider SSE deltas and persists ordered Runtime events with replayable SSE IDs.
-- Durable Agent Runtime with state machine, optimistic versioning, Worker leases, checkpoints, event replay, and restart recovery
+- Durable Agent Runtime with state machine, optimistic versioning, Worker leases, checkpoints, event replay, and restart recovery for approval decisions
 - Human-in-the-loop approval that pauses sensitive tools before execution and resumes the saved tool call exactly once after approval
 - Agent trace with in-memory local adapter and optional PostgreSQL JDBC repository
 - Tool confirmation queue with in-memory local adapter and optional PostgreSQL JDBC repository, expiry, and atomic decisions
@@ -46,6 +46,7 @@ Spring AI is pinned to the stable 1.1.x line because this project currently stay
   - search the local knowledge base
 - Local RAG prototype based on file-backed knowledge search
 - Feishu webhook endpoint with URL verification, signature verification, durable event inbox option, async retry processing, token provider, and reply client
+- Durable Feishu notification outbox for approval-required, final-result, and run-failed messages, including retries, stale-claim recovery, dead letters, metrics, and ADMIN manual retry
 - Baseline PostgreSQL, Redis, Docker Compose, and Flyway migration skeleton
 - Optional JWT authentication with JDBC users, BCrypt password hashes, and `USER`/`ADMIN` RBAC
 - Owner-scoped chat memory, Agent traces, and tool-approval lists for Web and Feishu actors
@@ -128,6 +129,12 @@ FEISHU_INBOX_RETRY_DELAY=30s
 FEISHU_INBOX_PROCESSING_TIMEOUT=5m
 FEISHU_INBOX_POLL_INTERVAL=30s
 FEISHU_INBOX_POLL_BATCH_SIZE=20
+FEISHU_OUTBOX_REPOSITORY=memory
+FEISHU_OUTBOX_MAX_ATTEMPTS=5
+FEISHU_OUTBOX_RETRY_DELAY=30s
+FEISHU_OUTBOX_PROCESSING_TIMEOUT=5m
+FEISHU_OUTBOX_POLL_INTERVAL=5s
+FEISHU_OUTBOX_POLL_BATCH_SIZE=20
 
 TAVILY_API_KEY=
 
@@ -148,6 +155,7 @@ REDIS_TIMEOUT=2s
 SPRING_FLYWAY_ENABLED=false
 
 AGENT_TRACE_REPOSITORY=memory
+AGENT_AUDIT_REPOSITORY=memory
 AGENT_RUNTIME_REPOSITORY=memory
 AGENT_RUNTIME_MAX_STEPS=5
 AGENT_RUNTIME_LEASE_DURATION=2m
@@ -216,9 +224,9 @@ To persist Agent runs, checkpoints, leases, and ordered events, set:
 $env:AGENT_RUNTIME_REPOSITORY = "jdbc"
 ```
 
-Local defaults remain lightweight for development. The `prod` profile rejects non-JDBC Runtime, trace, memory, approval, Feishu inbox, and user repositories.
+Local defaults remain lightweight for development. The `prod` profile rejects non-JDBC Runtime, trace, memory, approval, administrator audit, Feishu inbox/outbox, and user repositories.
 
-To persist and recover Feishu Webhook processing, set `FEISHU_INBOX_REPOSITORY=jdbc`. Production also requires this setting; local development defaults to memory.
+To persist and recover Feishu Webhook processing and approval/final/failure notification delivery, set both `FEISHU_INBOX_REPOSITORY=jdbc` and `FEISHU_OUTBOX_REPOSITORY=jdbc`. Production requires both settings; local development defaults to memory.
 
 To exercise authentication locally, apply Flyway migrations and set:
 
@@ -281,6 +289,7 @@ Current CI gate:
 
 - `./mvnw -B --no-transfer-progress test`
 - `./mvnw -B --no-transfer-progress -DskipTests package`
+- PostgreSQL 17 migration, repository reconstruction, and real database-process restart recovery tests
 
 See `docs/quality-gates.md` for the current quality gate and known CI/CD gaps.
 
@@ -376,6 +385,9 @@ POST /api/auth/login     public; returns a Bearer access token
 GET  /api/auth/me        authenticated
 /api/agent/**            authenticated
 approve/reject endpoints ADMIN only
+/api/agent/admin/**      ADMIN only
+/actuator/metrics/**     ADMIN only
+/actuator/health         public; details hidden
 /test/**                 ADMIN only
 POST /api/feishu/webhook public; protected by Feishu verification/signature checks
 ```
@@ -390,21 +402,33 @@ POST /api/feishu/webhook
 
 Handles Feishu URL verification and `im.message.receive_v1` events. The optional JDBC inbox provides event-ID deduplication, atomic processing leases, scheduled retries, stale-work recovery, and terminal `DEAD` state.
 
+Feishu approval-required, final-result, and run-failed notifications use a durable outbox. Operators with `ADMIN` can inspect aggregate state, list masked delivery records, and atomically requeue `DEAD` messages:
+
+```text
+GET  /api/agent/admin/feishu-outbox/summary
+GET  /api/agent/admin/feishu-outbox/messages?status=DEAD&limit=20
+POST /api/agent/admin/feishu-outbox/{id}/retry
+```
+
+Actuator exposes `health`, `info`, and `metrics`. Outbox gauges are available under `xingclaw.feishu.outbox.*`; metric labels never contain message text, run IDs, open IDs, or error text.
+
 ## Known Production Gaps
 
 The following gaps are intentional tracking items for the production-grade upgrade:
 
 - JWT authentication, `USER`/`ADMIN` RBAC, and owner checks exist for chat memory, traces, and approval lists; organization/tenant isolation is not implemented.
 - Access tokens currently have no refresh, revocation, key rotation, or login rate limiting.
-- PostgreSQL/Redis/Flyway infrastructure exists, and Agent Runtime/trace/chat memory/tool approvals/Feishu inbox have JDBC repository switches.
-- Runtime persistence is covered with H2 PostgreSQL-mode tests, but a real PostgreSQL kill/restart recovery drill is still missing.
+- PostgreSQL/Redis/Flyway infrastructure exists, and Agent Runtime/trace/chat memory/tool approvals/Feishu inbox/notification outbox/admin audit have JDBC repository switches. Redis is configured but is not yet used by application logic.
+- Runtime and notification-outbox persistence are covered by H2 tests and real PostgreSQL 17 migration/recovery gates, including a database-process restart drill.
+- Approval decisions recover after restart, but there is no general scheduler for abandoned `RUNNING` runs. The Feishu inbox also does not yet bind an event ID to its created run ID, so a crash during execution can create a second run when the inbox retries.
+- `CANCELLED` exists in the state model, but cancellation API, execution cooperation, persistence service, and tests are not implemented.
 - Provider checkpoints contain complete resume context and need production encryption plus retention cleanup.
 - Token events currently write individually; batching is needed before high-throughput deployment.
 - RAG is still local/file-backed, not pgvector hybrid retrieval.
 - No production Docker Compose stack yet.
-- Only a baseline CI quality gate exists; coverage, static analysis, container build, and integration-test gates are still missing.
-- No Prometheus/Grafana observability yet.
-- Tooling is safer than the initial prototype, but production tool policy still needs a full allow/approval/deny pipeline.
+- CI runs unit/functional tests, packaging, PostgreSQL integration, and database restart recovery. Coverage thresholds, static analysis, container build, security scanning, and deployment gates are still missing.
+- Micrometer outbox gauges exist, but Runtime/model/tool latency metrics, dashboards, alert thresholds, and SLOs are not implemented.
+- Tool invocation validation and allow/approval/reject decisions exist, but production policy still needs environment- or tenant-specific administration and broader adversarial testing.
 
 ## Production Upgrade Roadmap
 
