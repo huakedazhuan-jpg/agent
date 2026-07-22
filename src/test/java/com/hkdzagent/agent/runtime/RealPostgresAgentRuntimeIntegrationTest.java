@@ -8,6 +8,8 @@ import com.hkdzagent.agent.console.ToolConfirmation;
 import com.hkdzagent.agent.console.ToolConfirmationService;
 import com.hkdzagent.agent.im.FeishuResultOutboxMessage;
 import com.hkdzagent.agent.im.FeishuResultOutboxService;
+import com.hkdzagent.agent.im.FeishuInboxEvent;
+import com.hkdzagent.agent.im.JdbcFeishuEventInboxRepository;
 import com.hkdzagent.agent.im.JdbcFeishuResultOutboxRepository;
 import com.hkdzagent.agent.security.ActorIdentity;
 import com.hkdzagent.agent.trace.AgentTraceSanitizer;
@@ -216,6 +218,34 @@ class RealPostgresAgentRuntimeIntegrationTest {
     }
 
     @Test
+    void persistsFeishuEventRunBindingAndFencesStaleInboxClaim() {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        AgentRun run = runtimeRepository().create(AgentRun.created(
+                UUID.randomUUID().toString(), ActorIdentity.feishu("ou_binding_user"),
+                "ou_binding_user", "binding-conversation", UUID.randomUUID().toString(),
+                "bind this event", 5, now), "{}");
+        JdbcFeishuEventInboxRepository inbox = inboxRepository();
+        inbox.receive(new FeishuInboxEvent(
+                "event-postgres-binding", "im.message.receive_v1", "ou_binding_user", "{}",
+                FeishuInboxEvent.Status.RECEIVED, now,
+                null, null, now, 0, null));
+        FeishuInboxEvent first = inbox.claim(
+                "event-postgres-binding", now, Duration.ofMinutes(5), 3);
+
+        assertThat(inbox.bindRun(
+                first.eventId(), first.retryCount(), run.runId())).isTrue();
+        FeishuInboxEvent replacement = inbox.claim(
+                first.eventId(), now.plusSeconds(300), Duration.ofMinutes(5), 3);
+
+        JdbcFeishuEventInboxRepository afterRestart = inboxRepository();
+        assertThat(afterRestart.findById(first.eventId()).runId()).isEqualTo(run.runId());
+        assertThat(afterRestart.markProcessed(
+                first.eventId(), first.retryCount(), now.plusSeconds(301))).isFalse();
+        assertThat(afterRestart.markProcessed(
+                replacement.eventId(), replacement.retryCount(), now.plusSeconds(302))).isTrue();
+    }
+
+    @Test
     void survivesRepositoryRestartAndResumesApprovalExactlyOnce() {
         Instant now = Instant.parse("2026-01-01T00:00:00Z");
         JdbcAgentRunRepository firstProcess = runtimeRepository();
@@ -366,7 +396,7 @@ class RealPostgresAgentRuntimeIntegrationTest {
         assertThat(new JdbcTemplate(runtimeDataSource).queryForObject(
                 "SELECT MAX(CAST(version AS INTEGER)) FROM flyway_schema_history WHERE success",
                 Integer.class
-        )).isGreaterThanOrEqualTo(13);
+        )).isGreaterThanOrEqualTo(14);
         assertThat(waiting).isNotNull();
     }
 
@@ -386,6 +416,11 @@ class RealPostgresAgentRuntimeIntegrationTest {
     private JdbcFeishuResultOutboxRepository outboxRepository() {
         return new JdbcFeishuResultOutboxRepository(
                 new NamedParameterJdbcTemplate(runtimeDataSource));
+    }
+
+    private JdbcFeishuEventInboxRepository inboxRepository() {
+        return new JdbcFeishuEventInboxRepository(
+                new NamedParameterJdbcTemplate(runtimeDataSource), new ObjectMapper());
     }
 
     private JdbcAdminAuditRepository auditRepository() {

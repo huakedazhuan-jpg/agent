@@ -42,17 +42,33 @@ public class InMemoryFeishuEventInboxRepository implements FeishuEventInboxRepos
                 null,
                 null,
                 current.retryCount() + 1,
-                current.lastError()
+                current.lastError(),
+                current.runId()
         );
         events.put(eventId, claimed);
         return claimed;
     }
 
     @Override
-    public synchronized void markProcessed(String eventId, Instant processedAt) {
+    public synchronized boolean bindRun(String eventId, int claimAttempt, String runId) {
         FeishuInboxEvent current = events.get(eventId);
-        if (current == null || current.status() != FeishuInboxEvent.Status.PROCESSING) {
-            return;
+        if (!holdsClaim(current, claimAttempt) || current.runId() != null) {
+            return false;
+        }
+        events.put(eventId, new FeishuInboxEvent(
+                current.eventId(), current.eventType(), current.openId(), current.payload(),
+                current.status(), current.receivedAt(), current.claimedAt(), current.processedAt(),
+                current.nextAttemptAt(), current.retryCount(), current.lastError(), runId));
+        return true;
+    }
+
+    @Override
+    public synchronized boolean markProcessed(
+            String eventId, int claimAttempt, Instant processedAt
+    ) {
+        FeishuInboxEvent current = events.get(eventId);
+        if (!holdsClaim(current, claimAttempt)) {
+            return false;
         }
         events.put(eventId, copyWithOutcome(
                 current,
@@ -61,19 +77,21 @@ public class InMemoryFeishuEventInboxRepository implements FeishuEventInboxRepos
                 null,
                 null
         ));
+        return true;
     }
 
     @Override
-    public synchronized void markFailed(
+    public synchronized boolean markFailed(
             String eventId,
+            int claimAttempt,
             String error,
             Instant failedAt,
             Instant nextAttemptAt,
             boolean terminal
     ) {
         FeishuInboxEvent current = events.get(eventId);
-        if (current == null || current.status() != FeishuInboxEvent.Status.PROCESSING) {
-            return;
+        if (!holdsClaim(current, claimAttempt)) {
+            return false;
         }
         events.put(eventId, copyWithOutcome(
                 current,
@@ -82,6 +100,7 @@ public class InMemoryFeishuEventInboxRepository implements FeishuEventInboxRepos
                 terminal ? null : nextAttemptAt,
                 error
         ));
+        return true;
     }
 
     @Override
@@ -171,7 +190,14 @@ public class InMemoryFeishuEventInboxRepository implements FeishuEventInboxRepos
                 processedAt,
                 nextAttemptAt,
                 current.retryCount(),
-                lastError
+                lastError,
+                current.runId()
         );
+    }
+
+    private boolean holdsClaim(FeishuInboxEvent event, int claimAttempt) {
+        return event != null
+                && event.status() == FeishuInboxEvent.Status.PROCESSING
+                && event.retryCount() == claimAttempt;
     }
 }

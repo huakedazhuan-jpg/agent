@@ -24,6 +24,7 @@ public class FeishuEventProcessor {
 
     private final ObjectMapper objectMapper;
     private final AgentRunCoordinator runCoordinator;
+    private final FeishuRunSubmissionService submissionService;
     private final FeishuReplyClient feishuReplyClient;
     private final FeishuEventInboxRepository inboxRepository;
     private final FeishuProperties.Inbox inboxProperties;
@@ -35,17 +36,20 @@ public class FeishuEventProcessor {
     public FeishuEventProcessor(
             ObjectMapper objectMapper,
             AgentRunCoordinator runCoordinator,
+            FeishuRunSubmissionService submissionService,
             FeishuReplyClient feishuReplyClient,
             FeishuEventInboxRepository inboxRepository,
             FeishuProperties properties,
             @Qualifier("feishuTaskExecutor") Executor executor
     ) {
-        this(objectMapper, runCoordinator, feishuReplyClient, inboxRepository, properties, executor, Clock.systemUTC());
+        this(objectMapper, runCoordinator, submissionService, feishuReplyClient,
+                inboxRepository, properties, executor, Clock.systemUTC());
     }
 
     FeishuEventProcessor(
             ObjectMapper objectMapper,
             AgentRunCoordinator runCoordinator,
+            FeishuRunSubmissionService submissionService,
             FeishuReplyClient feishuReplyClient,
             FeishuEventInboxRepository inboxRepository,
             FeishuProperties properties,
@@ -54,6 +58,7 @@ public class FeishuEventProcessor {
     ) {
         this.objectMapper = objectMapper;
         this.runCoordinator = runCoordinator;
+        this.submissionService = submissionService;
         this.feishuReplyClient = feishuReplyClient;
         this.inboxRepository = inboxRepository;
         this.inboxProperties = properties.inbox();
@@ -93,24 +98,30 @@ public class FeishuEventProcessor {
 
             ActorIdentity owner = ActorIdentity.feishu(openId);
             String conversationId = new OwnedConversationId(owner, openId).encode();
-            AgentRun run = runCoordinator.execute(
-                    owner, openId, conversationId, userText, "feishu");
-            if (run.status() != AgentRunStatus.WAITING_APPROVAL
-                    && run.status() != AgentRunStatus.COMPLETED
-                    && run.status() != AgentRunStatus.FAILED) {
+            AgentRun run = submissionService.findOrCreate(
+                    inboxEvent, owner, openId, conversationId, userText);
+            if (run.status() == AgentRunStatus.CREATED) {
+                run = runCoordinator.executeCreated(run.runId(), "feishu");
+            }
+            if (run.status() != AgentRunStatus.RUNNING
+                    && run.status() != AgentRunStatus.WAITING_APPROVAL
+                    && !run.status().terminal()) {
                 throw new IllegalStateException(
                         "agent run failed: "
                                 + (run.errorMessage() == null
                                 ? run.status().name()
                                 : run.errorMessage()));
             }
-            inboxRepository.markProcessed(eventId, clock.instant());
+            inboxRepository.markProcessed(
+                    eventId, inboxEvent.retryCount(), clock.instant());
         } catch (Exception e) {
             boolean terminal = inboxEvent.retryCount() >= inboxProperties.maxAttempts();
             Instant failedAt = clock.instant();
             Instant nextAttemptAt = failedAt.plus(inboxProperties.retryDelay());
-            inboxRepository.markFailed(eventId, safeError(e), failedAt, nextAttemptAt, terminal);
-            if (terminal && !inboxEvent.openId().isBlank()) {
+            boolean failureRecorded = inboxRepository.markFailed(
+                    eventId, inboxEvent.retryCount(), safeError(e),
+                    failedAt, nextAttemptAt, terminal);
+            if (terminal && failureRecorded && !inboxEvent.openId().isBlank()) {
                 try {
                     feishuReplyClient.replyText(inboxEvent.openId(), ERROR_REPLY);
                 } catch (Exception ignored) {

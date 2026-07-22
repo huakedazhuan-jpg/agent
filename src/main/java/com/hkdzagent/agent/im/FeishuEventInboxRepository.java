@@ -10,10 +10,13 @@ public interface FeishuEventInboxRepository {
 
     FeishuInboxEvent claim(String eventId, Instant now, Duration processingTimeout, int maxAttempts);
 
-    void markProcessed(String eventId, Instant processedAt);
+    boolean bindRun(String eventId, int claimAttempt, String runId);
 
-    void markFailed(
+    boolean markProcessed(String eventId, int claimAttempt, Instant processedAt);
+
+    boolean markFailed(
             String eventId,
+            int claimAttempt,
             String error,
             Instant failedAt,
             Instant nextAttemptAt,

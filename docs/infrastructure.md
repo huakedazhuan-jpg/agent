@@ -44,7 +44,7 @@ $env:SPRING_FLYWAY_ENABLED = "true"
 .\mvnw.cmd spring-boot:run
 ```
 
-Migrations V1-V13 create durable state for:
+Migrations V1-V14 create durable state for:
 
 - conversations and messages
 - Agent trace aggregates and events
@@ -113,7 +113,7 @@ FEISHU_INBOX_POLL_BATCH_SIZE=20
 
 The inbox stores each event before asynchronous processing, deduplicates by event ID, atomically claims work, retries transient failures, recovers stale processing leases, and moves exhausted events to `DEAD`.
 
-The inbox does not yet persist an event-to-run binding. If the process exits after creating a run but before marking the inbox event processed, recovery can create a second run. Closing this gap requires durable event-to-run association and idempotent run submission.
+Each Inbox event can be bound to one Agent Run through `feishu_event_inbox.run_id`. Run creation, trace creation, and the conditional event binding share one transaction. The Inbox retry count is also used as a claim token, so a stale processor cannot bind a Run or overwrite the outcome of a newer claim. If a process exits after binding, recovery reuses the bound Run instead of creating another one; abandoned `RUNNING` work is delegated to the Runtime recovery policy.
 
 ## Feishu notification outbox
 

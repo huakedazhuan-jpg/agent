@@ -28,20 +28,44 @@ public class AgentRunCoordinator {
             String userMessage,
             String workerPrefix
     ) {
+        AgentRun created = create(owner, sessionId, conversationId, userMessage);
+        return executeCreated(created.runId(), workerPrefix);
+    }
+
+    public AgentRun create(
+            ActorIdentity owner,
+            String sessionId,
+            String conversationId,
+            String userMessage
+    ) {
         String traceId = UUID.randomUUID().toString();
         String message = userMessage == null ? "" : userMessage;
         traceRecorder.startTrace(owner, traceId, sessionId, message);
-        AgentRun created = runtimeService.create(
+        return runtimeService.create(
                 owner, sessionId, conversationId, traceId, message);
+    }
+
+    public AgentRun executeCreated(String runId, String workerPrefix) {
+        AgentRun current = runtimeService.find(runId);
+        if (current == null) {
+            throw new IllegalArgumentException("agent run not found: " + runId);
+        }
+        if (current.status() != AgentRunStatus.CREATED) {
+            return current;
+        }
         String prefix = workerPrefix == null || workerPrefix.isBlank()
                 ? "sync"
                 : workerPrefix;
         runtimeExecutor.execute(
-                created.runId(), prefix + "-" + UUID.randomUUID(), null);
-        AgentRun result = runtimeService.find(created.runId());
+                runId, prefix + "-" + UUID.randomUUID(), null);
+        AgentRun result = runtimeService.find(runId);
         if (result == null) {
             throw new IllegalStateException("agent run disappeared after execution");
         }
         return result;
+    }
+
+    public AgentRun find(String runId) {
+        return runtimeService.find(runId);
     }
 }

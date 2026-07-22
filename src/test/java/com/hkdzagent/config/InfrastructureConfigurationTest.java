@@ -302,6 +302,21 @@ class InfrastructureConfigurationTest {
     }
 
     @Test
+    void fourteenthFlywayMigrationBindsFeishuEventsToAgentRuns() throws IOException {
+        Path migration = PROJECT_ROOT.resolve(
+                "src/main/resources/db/migration/postgresql/V14__bind_feishu_events_to_agent_runs.sql"
+        );
+        String sql = Files.readString(migration);
+
+        assertThat(sql).contains(
+                "ALTER TABLE feishu_event_inbox",
+                "ADD COLUMN run_id UUID REFERENCES agent_runs (id) ON DELETE SET NULL",
+                "CREATE UNIQUE INDEX ux_feishu_event_inbox_run_id",
+                "WHERE run_id IS NOT NULL"
+        );
+    }
+
+    @Test
     void environmentTemplateDocumentsInfrastructureSettings() throws IOException {
         String envExample = Files.readString(PROJECT_ROOT.resolve(".env.example"));
 
@@ -337,8 +352,10 @@ class InfrastructureConfigurationTest {
                 "# Infrastructure",
                 "docker compose up -d postgres redis",
                 "PostgreSQL 17 for durable application state",
-                "Migrations V1-V13",
+                "Migrations V1-V14",
                 "Feishu notification outbox",
+                "feishu_event_inbox.run_id",
+                "claim token",
                 "FOR UPDATE SKIP LOCKED",
                 "no `TOOL_STARTED` event exists",
                 "RUN_RECOVERY_BLOCKED",

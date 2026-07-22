@@ -46,7 +46,7 @@ Spring AI is pinned to the stable 1.1.x line because this project currently stay
   - search the local knowledge base
 - Local RAG prototype based on file-backed knowledge search
 - Feishu webhook endpoint with URL verification, signature verification, durable event inbox option, async retry processing, token provider, and reply client
-- Durable Feishu notification outbox for approval-required, final-result, and run-failed messages, including retries, stale-claim recovery, dead letters, metrics, and ADMIN manual retry
+- Durable Feishu Inbox with event-to-Run binding and claim fencing, plus a notification outbox for approval-required, final-result, and run-failed messages, including retries, stale-claim recovery, dead letters, metrics, and ADMIN manual retry
 - Baseline PostgreSQL, Redis, Docker Compose, and Flyway migration skeleton
 - Optional JWT authentication with JDBC users, BCrypt password hashes, and `USER`/`ADMIN` RBAC
 - Owner-scoped chat memory, Agent traces, and tool-approval lists for Web and Feishu actors

@@ -177,8 +177,19 @@ class FeishuEventProcessorTest {
         properties.inbox().setMaxAttempts(maxAttempts);
         properties.inbox().setRetryDelay(Duration.ofSeconds(30));
         properties.inbox().setProcessingTimeout(Duration.ofMinutes(5));
+        FeishuRunSubmissionService submissionService = mock(FeishuRunSubmissionService.class);
+        when(submissionService.findOrCreate(
+                org.mockito.ArgumentMatchers.any(FeishuInboxEvent.class),
+                org.mockito.ArgumentMatchers.any(ActorIdentity.class),
+                anyString(), anyString(), anyString()))
+                .thenAnswer(invocation -> runCoordinator.execute(
+                        invocation.getArgument(1),
+                        invocation.getArgument(2),
+                        invocation.getArgument(3),
+                        invocation.getArgument(4),
+                        "feishu"));
         return new FeishuEventProcessor(
-                new ObjectMapper(), runCoordinator, replyClient,
+                new ObjectMapper(), runCoordinator, submissionService, replyClient,
                 repository, properties, executor, clock
         );
     }

@@ -10,7 +10,7 @@ Built a production-designed Spring Boot AI Agent system with durable PostgreSQL 
 - Implemented OpenAI-compatible streaming tool calling by incrementally parsing text and function-call deltas, preserving tool-call IDs and arguments across chunks instead of splitting a completed answer.
 - Built a human-in-the-loop safety workflow that pauses file and command tools before execution, persists resume context transactionally, prevents duplicate approval execution, and reconciles approved/rejected/expired decisions after restart.
 - Added JWT authentication, `USER`/`ADMIN` RBAC, owner-scoped Runtime/trace/memory/approval access, PostgreSQL-backed users, BCrypt password storage, and production fail-fast configuration validation.
-- Hardened Feishu processing with a PostgreSQL inbox and notification outbox, event/business-key deduplication, processing leases, retries, stale-work recovery, dead letters, ADMIN retry, audit records, and low-cardinality metrics.
+- Hardened Feishu processing with a PostgreSQL inbox and notification outbox, event-to-Run binding, fenced processing claims, event/business-key deduplication, retries, stale-work recovery, dead letters, ADMIN retry, audit records, and low-cardinality metrics.
 - Maintained an automated Java test suite covering state transitions, JDBC repositories, transaction rollback, concurrency controls, streaming protocol parsing, approval recovery, API authorization, configuration safety, PostgreSQL 17 migrations, and database-process restart recovery.
 - Implemented lease-epoch fencing, heartbeat renewal, `SKIP LOCKED` stale-run claiming, bounded model-stage recovery, and conservative blocking when tool side effects are indeterminate.
 
