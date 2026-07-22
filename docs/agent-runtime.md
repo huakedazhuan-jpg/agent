@@ -43,7 +43,15 @@ The Runtime uses two different controls:
 - `version` prevents stale state updates from overwriting a newer checkpoint.
 - worker lease fields prevent multiple application instances from advancing the same runnable run concurrently.
 
-Approval decisions retain their existing atomic pending-state update. Resuming a run must additionally use a conditional `WAITING_APPROVAL -> RUNNING` transition so duplicate approval callbacks cannot execute a tool twice.
+Approval and cancellation acquire resources in one order: Run row first, approval row second. An approval decision is accepted only while the locked Run remains in `WAITING_APPROVAL` with the same pending approval ID. Resuming then uses a conditional `WAITING_APPROVAL -> RUNNING` transition so duplicate callbacks cannot execute a tool twice. A cancellation that wins the Run lock closes the pending approval; a late decision is reported as a conflict.
+
+Tool invocation has a separate atomic start gate. While holding the active Run lease fence, the gate checks that the Run is still executable and reserves the stable `(runId, toolCallId)` journal identity. Cancellation committed before this gate prevents both invocation and journal reservation. If cancellation occurs after the gate, the tool result is still recorded durably because the external effect may already have happened.
+
+## Cancellation
+
+`POST /api/agent/runs/{runId}/cancel` is owner-scoped, durable, and idempotent. It clears the Worker lease, writes `RUN_CANCELLED`, finalizes the sanitized Trace as cancelled, and, for a waiting Run, closes the linked pending approval in the same transaction. A caller cannot use the endpoint to discover another owner's Run.
+
+Execution cooperates with cancellation at model-loop and tool-start boundaries. This prevents later rounds or tools from starting and prevents stale workers from overwriting `CANCELLED` with completion or failure. It is not a universal thread interrupt and cannot retract an external side effect accepted before cancellation committed.
 
 ## Current implementation boundary
 
@@ -53,8 +61,8 @@ Sensitive tools are gated before execution. Runtime persists the provider checkp
 
 Expired `RUNNING` leases are discovered by a separate recovery scheduler. PostgreSQL workers use `FOR UPDATE SKIP LOCKED` and a monotonically increasing lease epoch so only one replacement Worker can proceed. Recovery combines event history with the durable tool-execution journal: model-only work can restart within a bounded attempt budget; an unfinished journal entry is classified as an uncertain external effect; a completed entry is still blocked because the project does not persist a complete post-tool model continuation checkpoint; and a legacy `TOOL_STARTED` event without journal evidence is treated as unsafe.
 
-Both blocking and streaming chat endpoints execute through Runtime. Real PostgreSQL 17 migration, repository reconstruction, and database-process restart gates are implemented.
+Both blocking and streaming chat endpoints execute through Runtime. Real PostgreSQL 17 migration, repository reconstruction, cancellation-versus-approval row-lock races, and database-process restart gates are implemented.
 
-The remaining Runtime boundary is explicit: `CANCELLED` is represented in the state model but has no API or execution implementation. Provider checkpoints remain unencrypted, normal tool rounds do not have complete continuation snapshots, and high-volume token events are not batched. The journal prevents duplicate local submission for a stable `(runId, toolCallId)` but does not turn arbitrary external APIs into exactly-once systems.
+The remaining Runtime boundary is explicit: cancellation is cooperative rather than a universal interrupt, provider checkpoints remain unencrypted, normal tool rounds do not have complete continuation snapshots, and high-volume token events are not batched. The journal prevents duplicate local submission for a stable `(runId, toolCallId)` but does not turn arbitrary external APIs into exactly-once systems.
 
 See [tool-execution-journal.md](tool-execution-journal.md) for the journal state machine and operator response to uncertain executions.

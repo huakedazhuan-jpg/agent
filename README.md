@@ -2,7 +2,7 @@
 
 XingClaw Agent is a Spring Boot AI agent system focused on durable execution, tool calling, human approval, multi-user isolation, and external-channel integration.
 
-The repository contains a production-designed Agent Runtime with PostgreSQL persistence, real provider token streaming, restart-recoverable tool approval, fenced recovery of abandoned runs, a durable tool-execution journal, JWT/RBAC, owner-scoped resources, and durable Feishu notifications. Real PostgreSQL 17 migration and database-process restart gates are implemented. It is suitable as a resume project, but should not be described as production-deployed: external exactly-once effects, post-tool model continuation checkpoints, checkpoint encryption, load testing, complete observability, and deployment automation remain incomplete.
+The repository contains a production-designed Agent Runtime with PostgreSQL persistence, real provider token streaming, restart-recoverable tool approval, owner-scoped cooperative cancellation, fenced recovery of abandoned runs, a durable tool-execution journal, JWT/RBAC, owner-scoped resources, and durable Feishu notifications. Real PostgreSQL 17 migration, cancellation/approval concurrency, and database-process restart gates are implemented. It is suitable as a resume project, but should not be described as production-deployed: external exactly-once effects, post-tool model continuation checkpoints, checkpoint encryption, load testing, complete observability, and deployment automation remain incomplete.
 
 ## Current Status
 
@@ -35,6 +35,7 @@ Spring AI is pinned to the stable 1.1.x line because this project currently stay
   - Reads real provider SSE deltas and persists ordered Runtime events with replayable SSE IDs.
 - Durable Agent Runtime with state machine, optimistic versioning, fenced Worker leases, heartbeats, event replay, approval recovery, and classified recovery of expired `RUNNING` runs
 - Human-in-the-loop approval that pauses sensitive tools before execution, conditionally resumes the bound invocation, and uses the execution journal to prevent duplicate local submission
+- Owner-scoped, idempotent Run cancellation with durable events, cooperative model-loop stopping, approval cleanup, and an atomic run/journal gate before tool invocation
 - Durable tool-execution journal keyed by Run and provider tool-call ID, with binding validation, result replay, completion fencing, and conservative blocking of uncertain side effects
 - Agent trace with in-memory local adapter and optional PostgreSQL JDBC repository
 - Tool confirmation queue with in-memory local adapter and optional PostgreSQL JDBC repository, expiry, and atomic decisions
@@ -293,6 +294,7 @@ Current CI gate:
 - PostgreSQL 17 migration, repository reconstruction, and real database-process restart recovery tests
 - Concurrent expired-run recovery tests proving that only one PostgreSQL Worker can claim a stale lease
 - Tool-journal concurrency, crash-window, and PostgreSQL process-restart tests
+- PostgreSQL row-lock race tests for concurrent cancellation and approval decisions
 
 See `docs/quality-gates.md` for the current quality gate and known CI/CD gaps.
 
@@ -347,6 +349,7 @@ Current event names:
 - `tool-started`
 - `tool-completed`
 - `approval-required`
+- `cancelled`
 - `final`
 - `error`
 
@@ -358,9 +361,11 @@ Each event includes a durable per-run sequence ID. Provider text chunks are emit
 GET /api/agent/runs
 GET /api/agent/runs/{runId}
 GET /api/agent/runs/{runId}/events?after={sequence}
+POST /api/agent/runs/{runId}/cancel
 ```
 
 Runtime queries and event replay are owner-scoped. API views intentionally omit provider checkpoints because they may contain complete tool arguments.
+Cancellation is owner-scoped and idempotent. It returns `404` for an unknown or another owner's Run, `409` for an already terminal non-cancelled Run, and closes a matching pending approval in the same transaction. Cancellation is cooperative: it prevents future model rounds and tool starts, but it cannot undo an external side effect that already crossed the tool-start boundary.
 
 ### Agent Trace
 
@@ -424,7 +429,7 @@ The following gaps are intentional tracking items for the production-grade upgra
 - PostgreSQL/Redis/Flyway infrastructure exists, and Agent Runtime/trace/chat memory/tool approvals/Feishu inbox/notification outbox/admin audit have JDBC repository switches. Redis is configured but is not yet used by application logic.
 - Runtime and notification-outbox persistence are covered by H2 tests and real PostgreSQL 17 migration/recovery gates, including concurrent stale-run claiming and a database-process restart drill.
 - Expired `RUNNING` runs are claimed by a recovery scheduler, and Feishu events are transactionally bound to their durable Run. Recovery after any tool activity remains deliberately manual because the project does not persist a complete post-tool model continuation checkpoint.
-- `CANCELLED` exists in the state model, but cancellation API, execution cooperation, persistence service, and tests are not implemented.
+- Durable cooperative cancellation is implemented and race-tested through model, approval, and pre-tool boundaries. It does not forcibly interrupt arbitrary blocking provider calls or roll back external side effects that were already accepted.
 - Provider checkpoints contain complete resume context and need production encryption plus retention cleanup.
 - Token events currently write individually; batching is needed before high-throughput deployment.
 - RAG is still local/file-backed, not pgvector hybrid retrieval.
@@ -454,6 +459,6 @@ The project is being upgraded in staged phases:
 
 Recommended current description:
 
-> A production-designed Spring Boot AI Agent system with a PostgreSQL-backed execution state machine, real SSE token streaming, restart-recoverable human approval, a fenced tool-execution journal, Worker lease recovery, JWT/RBAC, owner-scoped resources, durable Feishu processing, and automated PostgreSQL restart tests.
+> A production-designed Spring Boot AI Agent system with a PostgreSQL-backed execution state machine, real SSE token streaming, restart-recoverable human approval, owner-scoped cooperative cancellation, a fenced tool-execution journal, Worker lease recovery, JWT/RBAC, durable Feishu processing, and automated PostgreSQL concurrency/restart tests.
 
 Do not yet claim production deployment, arbitrary external exactly-once effects, automatic continuation after completed tools, pgvector retrieval, complete observability, or proven high-concurrency capacity.
