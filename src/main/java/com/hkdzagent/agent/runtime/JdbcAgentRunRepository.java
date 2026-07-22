@@ -12,6 +12,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 public class JdbcAgentRunRepository implements AgentRunRepository {
 
@@ -195,6 +196,23 @@ public class JdbcAgentRunRepository implements AgentRunRepository {
                 return null;
             }
             return findById(runId);
+        });
+    }
+
+    @Override
+    public <T> T executeWithActiveLease(
+            String runId,
+            String workerId,
+            long leaseEpoch,
+            Instant now,
+            Supplier<T> action
+    ) {
+        return transactions.execute(status -> {
+            AgentRun current = findForUpdate(runId);
+            if (current == null || !current.holdsLease(workerId, leaseEpoch, now)) {
+                return null;
+            }
+            return action.get();
         });
     }
 

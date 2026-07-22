@@ -10,6 +10,7 @@ import com.hkdzagent.agent.tool.AgentToolRegistry;
 import com.hkdzagent.agent.tool.ToolAccessPolicy;
 import com.hkdzagent.agent.tool.ToolApprovalPolicy;
 import com.hkdzagent.agent.tool.ToolExecutionPipeline;
+import com.hkdzagent.agent.tool.InMemoryToolExecutionJournalRepository;
 import com.hkdzagent.agent.tool.ToolInvocationContext;
 import com.hkdzagent.agent.tool.ToolInvocationValidator;
 import com.hkdzagent.agent.tool.ToolMetadata;
@@ -69,17 +70,23 @@ class ApprovedToolExecutionServiceTest {
         ObjectMapper objectMapper = new ObjectMapper();
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
         CountingTool tool = new CountingTool();
+        InMemoryAgentRunRepository runRepository = new InMemoryAgentRunRepository();
+        InMemoryToolExecutionJournalRepository journalRepository =
+                new InMemoryToolExecutionJournalRepository();
         ToolExecutionPipeline pipeline = new ToolExecutionPipeline(
                 new ToolInvocationValidator(
                         new AgentToolRegistry(List.of(tool)), objectMapper, 160),
                 new ToolPolicyEngine(
-                        ToolAccessPolicy.allowAuthenticated(), invocation -> false));
+                        ToolAccessPolicy.allowAuthenticated(), invocation -> false),
+                journalRepository,
+                new RunFencedToolExecutionStartGate(runRepository, journalRepository),
+                clock);
         InMemoryToolConfirmationRepository repository =
                 new InMemoryToolConfirmationRepository();
         ToolConfirmationService confirmations = new ToolConfirmationService(
                 repository, new AgentTraceSanitizer(160), Duration.ofMinutes(15), clock);
         AgentRuntimeService runtime = new AgentRuntimeService(
-                new InMemoryAgentRunRepository(),
+                runRepository,
                 new AgentRuntimeProperties(), objectMapper, clock);
         AgentRun created = runtime.create(
                 ActorIdentity.user("user-a"), "session-1", "conversation-1",

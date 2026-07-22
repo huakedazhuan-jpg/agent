@@ -107,10 +107,12 @@ public class ToolRegistryConfig {
     public ToolExecutionPipeline toolExecutionPipeline(
             ToolInvocationValidator validator,
             ToolPolicyEngine policyEngine,
-            ToolExecutionJournalRepository journalRepository
+            ToolExecutionJournalRepository journalRepository,
+            ToolExecutionStartGate startGate
     ) {
         return new ToolExecutionPipeline(
-                validator, policyEngine, journalRepository, java.time.Clock.systemUTC());
+                validator, policyEngine, journalRepository,
+                startGate, java.time.Clock.systemUTC());
     }
 
     public record FileRequest(

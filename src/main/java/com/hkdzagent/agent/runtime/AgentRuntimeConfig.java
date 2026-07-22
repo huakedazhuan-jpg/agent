@@ -8,6 +8,7 @@ import com.hkdzagent.agent.console.ToolConfirmationProperties;
 import com.hkdzagent.agent.console.ToolConfirmationService;
 import com.hkdzagent.agent.tool.ToolExecutionPipeline;
 import com.hkdzagent.agent.tool.ToolExecutionJournalRepository;
+import com.hkdzagent.agent.tool.ToolExecutionStartGate;
 import com.hkdzagent.agent.im.FeishuResultOutboxService;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -59,6 +60,14 @@ public class AgentRuntimeConfig {
             AgentTraceSanitizer sanitizer
     ) {
         return new AgentCancellationService(runtimeService, traceRecorder, sanitizer);
+    }
+
+    @Bean
+    public ToolExecutionStartGate toolExecutionStartGate(
+            AgentRunRepository runRepository,
+            ToolExecutionJournalRepository journalRepository
+    ) {
+        return new RunFencedToolExecutionStartGate(runRepository, journalRepository);
     }
 
     @Bean

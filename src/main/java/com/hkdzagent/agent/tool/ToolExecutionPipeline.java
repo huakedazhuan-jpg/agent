@@ -9,6 +9,7 @@ public class ToolExecutionPipeline {
     private final ToolInvocationValidator validator;
     private final ToolPolicyEngine policyEngine;
     private final ToolExecutionJournalRepository journalRepository;
+    private final ToolExecutionStartGate startGate;
     private final Clock clock;
 
     public ToolExecutionPipeline(ToolInvocationValidator validator, ToolPolicyEngine policyEngine) {
@@ -24,10 +25,27 @@ public class ToolExecutionPipeline {
         this.validator = validator;
         this.policyEngine = policyEngine;
         this.journalRepository = journalRepository;
+        this.startGate = (candidate, fence) -> fence == null
+                ? ToolExecutionStartGate.Decision.allowed(journalRepository.reserve(candidate))
+                : ToolExecutionStartGate.Decision.denied();
         this.clock = clock;
     }
 
-    public ToolPipelineResult invoke(
+    public ToolExecutionPipeline(
+            ToolInvocationValidator validator,
+            ToolPolicyEngine policyEngine,
+            ToolExecutionJournalRepository journalRepository,
+            ToolExecutionStartGate startGate,
+            Clock clock
+    ) {
+        this.validator = validator;
+        this.policyEngine = policyEngine;
+        this.journalRepository = journalRepository;
+        this.startGate = startGate;
+        this.clock = clock;
+    }
+
+    ToolPipelineResult invoke(
             ToolInvocationContext context,
             String toolName,
             String argumentsJson
@@ -36,7 +54,20 @@ public class ToolExecutionPipeline {
         if (prepared.result().status() != ToolPipelineResult.Status.READY) {
             return prepared.result();
         }
-        return execute(prepared.invocation());
+        return execute(prepared.invocation(), null);
+    }
+
+    public ToolPipelineResult invokeFenced(
+            ToolInvocationContext context,
+            String toolName,
+            String argumentsJson,
+            ToolExecutionFence fence
+    ) {
+        PreparedInvocation prepared = prepare(context, toolName, argumentsJson);
+        if (prepared.result().status() != ToolPipelineResult.Status.READY) {
+            return prepared.result();
+        }
+        return execute(prepared.invocation(), fence);
     }
 
     public ToolPipelineResult assess(
@@ -47,7 +78,7 @@ public class ToolExecutionPipeline {
         return prepare(context, toolName, argumentsJson).result();
     }
 
-    public ToolPipelineResult invokeApproved(
+    ToolPipelineResult invokeApproved(
             ToolInvocationContext context,
             String toolName,
             String argumentsJson,
@@ -70,7 +101,34 @@ public class ToolExecutionPipeline {
                     prepared.invocation(), ToolPipelineResult.Status.REJECTED, null,
                     "approved arguments hash does not match invocation arguments");
         }
-        return execute(prepared.invocation());
+        return execute(prepared.invocation(), null);
+    }
+
+    public ToolPipelineResult invokeApprovedFenced(
+            ToolInvocationContext context,
+            String toolName,
+            String argumentsJson,
+            String approvedToolVersion,
+            String approvedArgumentsHash,
+            ToolExecutionFence fence
+    ) {
+        PreparedInvocation prepared = prepare(context, toolName, argumentsJson);
+        ToolPipelineResult assessment = prepared.result();
+        if (assessment.status() == ToolPipelineResult.Status.REJECTED
+                || assessment.status() == ToolPipelineResult.Status.FAILED) {
+            return assessment;
+        }
+        if (!assessment.toolVersion().equals(approvedToolVersion)) {
+            return ToolPipelineResult.from(
+                    prepared.invocation(), ToolPipelineResult.Status.REJECTED, null,
+                    "approved tool version does not match registered tool version");
+        }
+        if (!assessment.argumentsHash().equals(approvedArgumentsHash)) {
+            return ToolPipelineResult.from(
+                    prepared.invocation(), ToolPipelineResult.Status.REJECTED, null,
+                    "approved arguments hash does not match invocation arguments");
+        }
+        return execute(prepared.invocation(), fence);
     }
 
     private PreparedInvocation prepare(
@@ -100,7 +158,10 @@ public class ToolExecutionPipeline {
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
-    private ToolPipelineResult execute(ValidatedToolInvocation invocation) {
+    private ToolPipelineResult execute(
+            ValidatedToolInvocation invocation,
+            ToolExecutionFence fence
+    ) {
         Instant startedAt = clock.instant();
         ToolExecutionJournalEntry candidate = ToolExecutionJournalEntry.started(
                 invocation.context(),
@@ -109,8 +170,13 @@ public class ToolExecutionPipeline {
                 invocation.argumentsHash(),
                 UUID.randomUUID().toString(),
                 startedAt);
-        ToolExecutionJournalRepository.Reservation reservation =
-                journalRepository.reserve(candidate);
+        ToolExecutionStartGate.Decision gateDecision = startGate.reserve(candidate, fence);
+        if (!gateDecision.allowed()) {
+            return ToolPipelineResult.from(
+                    invocation, ToolPipelineResult.Status.REJECTED, null,
+                    "agent run execution fence is not active");
+        }
+        ToolExecutionJournalRepository.Reservation reservation = gateDecision.reservation();
         ToolExecutionJournalEntry journalEntry = reservation.entry();
         if (!candidate.hasSameBinding(journalEntry)) {
             return ToolPipelineResult.from(

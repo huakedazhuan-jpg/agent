@@ -7,6 +7,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 public class InMemoryAgentRunRepository implements AgentRunRepository {
 
@@ -132,6 +133,21 @@ public class InMemoryAgentRunRepository implements AgentRunRepository {
         }
         runs.put(runId, renewed);
         return renewed;
+    }
+
+    @Override
+    public synchronized <T> T executeWithActiveLease(
+            String runId,
+            String workerId,
+            long leaseEpoch,
+            Instant now,
+            Supplier<T> action
+    ) {
+        AgentRun current = runs.get(runId);
+        if (current == null || !current.holdsLease(workerId, leaseEpoch, now)) {
+            return null;
+        }
+        return action.get();
     }
 
     @Override

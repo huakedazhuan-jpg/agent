@@ -3,6 +3,7 @@ package com.hkdzagent.agent.runtime;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.function.Supplier;
 
 public interface AgentRunRepository {
 
@@ -30,6 +31,18 @@ public interface AgentRunRepository {
             long leaseEpoch,
             Instant now,
             Duration leaseDuration
+    );
+
+    /**
+     * Runs a persistence-only action while holding the run's execution fence.
+     * The action must not perform external I/O because the run row remains locked.
+     */
+    <T> T executeWithActiveLease(
+            String runId,
+            String workerId,
+            long leaseEpoch,
+            Instant now,
+            Supplier<T> action
     );
 
     AgentRun update(AgentRun run, long expectedVersion, String requiredLeaseOwner);

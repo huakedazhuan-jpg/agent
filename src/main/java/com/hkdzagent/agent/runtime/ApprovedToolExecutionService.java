@@ -6,6 +6,7 @@ import com.hkdzagent.agent.console.ToolConfirmation;
 import com.hkdzagent.agent.console.ToolConfirmationService;
 import com.hkdzagent.agent.loop.AgentObservation;
 import com.hkdzagent.agent.tool.ToolExecutionPipeline;
+import com.hkdzagent.agent.tool.ToolExecutionFence;
 import com.hkdzagent.agent.tool.ToolInvocationContext;
 import com.hkdzagent.agent.tool.ToolPipelineResult;
 
@@ -35,12 +36,13 @@ public class ApprovedToolExecutionService {
 
         ToolInvocationContext context = new ToolInvocationContext(
                 run.ownerKey(), run.runId(), run.traceId(), checkpoint.toolCallId(), Set.of());
-        ToolPipelineResult result = pipeline.invokeApproved(
+        ToolPipelineResult result = pipeline.invokeApprovedFenced(
                 context,
                 checkpoint.toolName(),
                 checkpoint.arguments(),
                 confirmation.toolVersion(),
-                confirmation.argumentsHash()
+                confirmation.argumentsHash(),
+                new ToolExecutionFence(run.leaseOwner(), run.leaseEpoch())
         );
         if (result.status() == ToolPipelineResult.Status.READY
                 || result.status() == ToolPipelineResult.Status.APPROVAL_REQUIRED) {

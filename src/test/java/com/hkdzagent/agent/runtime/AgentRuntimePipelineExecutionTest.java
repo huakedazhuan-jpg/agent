@@ -13,6 +13,7 @@ import com.hkdzagent.agent.tool.AgentToolRegistry;
 import com.hkdzagent.agent.tool.ToolAccessPolicy;
 import com.hkdzagent.agent.tool.ToolApprovalPolicy;
 import com.hkdzagent.agent.tool.ToolExecutionPipeline;
+import com.hkdzagent.agent.tool.InMemoryToolExecutionJournalRepository;
 import com.hkdzagent.agent.tool.ToolInvocationValidator;
 import com.hkdzagent.agent.tool.ToolMetadata;
 import com.hkdzagent.agent.tool.ToolPolicyEngine;
@@ -81,19 +82,25 @@ class AgentRuntimePipelineExecutionTest {
         Clock clock = Clock.fixed(
                 Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC);
         AgentTraceSanitizer sanitizer = new AgentTraceSanitizer(160);
+        InMemoryAgentRunRepository runRepository = new InMemoryAgentRunRepository();
         AgentRuntimeService runtime = new AgentRuntimeService(
-                new InMemoryAgentRunRepository(),
+                runRepository,
                 new AgentRuntimeProperties(), objectMapper, clock);
         AgentTraceRecorder recorder = new AgentTraceRecorder(
                 new InMemoryAgentTraceRepository(), sanitizer);
         CountingTool tool = new CountingTool();
         AtomicBoolean approvalRequired = new AtomicBoolean(false);
+        InMemoryToolExecutionJournalRepository journalRepository =
+                new InMemoryToolExecutionJournalRepository();
         ToolExecutionPipeline pipeline = new ToolExecutionPipeline(
                 new ToolInvocationValidator(
                         new AgentToolRegistry(List.of(tool)), objectMapper, 160),
                 new ToolPolicyEngine(
                         ToolAccessPolicy.allowAuthenticated(),
-                        invocation -> approvalRequired.get()));
+                        invocation -> approvalRequired.get()),
+                journalRepository,
+                new RunFencedToolExecutionStartGate(runRepository, journalRepository),
+                clock);
         LLMClient llm = mock(LLMClient.class);
         when(llm.runWithTools(
                 anyString(), anyString(), anyString(), any(AgentExecutionObserver.class)))

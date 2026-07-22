@@ -17,6 +17,7 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -206,6 +207,38 @@ class JdbcAgentRunRepositoryTest {
         assertThat(repository.findRecoveryEvidence(stored.runId()))
                 .isEqualTo(new AgentRunRecoveryEvidence(true, 2));
         assertThat(repository.findRecoveryEvidence(UUID.randomUUID().toString())).isNull();
+    }
+
+    @Test
+    void executesGateActionOnlyForCurrentUnexpiredLeaseFence() {
+        AgentRun stored = repository.create(run("user-gate"), "{}");
+        AgentRunClaim claim = repository.claim(
+                stored.runId(), "worker-gate", now, Duration.ofSeconds(30));
+        AtomicInteger executions = new AtomicInteger();
+
+        String allowed = repository.executeWithActiveLease(
+                stored.runId(), "worker-gate", claim.run().leaseEpoch(), now.plusSeconds(1),
+                () -> {
+                    executions.incrementAndGet();
+                    return "reserved";
+                });
+        String staleEpoch = repository.executeWithActiveLease(
+                stored.runId(), "worker-gate", claim.run().leaseEpoch() + 1, now.plusSeconds(1),
+                () -> {
+                    executions.incrementAndGet();
+                    return "must-not-run";
+                });
+        String expired = repository.executeWithActiveLease(
+                stored.runId(), "worker-gate", claim.run().leaseEpoch(), now.plusSeconds(31),
+                () -> {
+                    executions.incrementAndGet();
+                    return "must-not-run";
+                });
+
+        assertThat(allowed).isEqualTo("reserved");
+        assertThat(staleEpoch).isNull();
+        assertThat(expired).isNull();
+        assertThat(executions).hasValue(1);
     }
 
     private AgentRun run(String userId) {

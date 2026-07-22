@@ -6,6 +6,7 @@ import com.hkdzagent.agent.loop.AgentLoopResult;
 import com.hkdzagent.agent.loop.AgentObservation;
 import com.hkdzagent.agent.console.ToolConfirmationProperties;
 import com.hkdzagent.agent.tool.ToolExecutionPipeline;
+import com.hkdzagent.agent.tool.ToolExecutionFence;
 import com.hkdzagent.agent.tool.ToolInvocationContext;
 import com.hkdzagent.agent.tool.ToolPipelineResult;
 import com.hkdzagent.agent.trace.AgentTraceRecorder;
@@ -496,8 +497,9 @@ public class AgentRuntimeExecutor {
             }
             ToolInvocationContext context = new ToolInvocationContext(
                     run.ownerKey(), run.runId(), run.traceId(), toolCallId, Set.of());
-            ToolPipelineResult result = toolExecutionPipeline.invoke(
-                    context, toolName, arguments);
+            ToolPipelineResult result = toolExecutionPipeline.invokeFenced(
+                    context, toolName, arguments,
+                    new ToolExecutionFence(workerId, run.leaseEpoch()));
             if (!pending.assessment().toolVersion().equals(result.toolVersion())
                     || !pending.assessment().argumentsHash().equals(result.argumentsHash())) {
                 throw new SecurityException(
