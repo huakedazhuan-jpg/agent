@@ -14,6 +14,7 @@ import com.hkdzagent.agent.tool.ToolAccessPolicy;
 import com.hkdzagent.agent.tool.ToolApprovalPolicy;
 import com.hkdzagent.agent.tool.ToolExecutionPipeline;
 import com.hkdzagent.agent.tool.InMemoryToolExecutionJournalRepository;
+import com.hkdzagent.agent.tool.ToolExecutionJournalEntry;
 import com.hkdzagent.agent.tool.ToolInvocationValidator;
 import com.hkdzagent.agent.tool.ToolMetadata;
 import com.hkdzagent.agent.tool.ToolPolicyEngine;
@@ -32,6 +33,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -77,6 +79,51 @@ class AgentRuntimePipelineExecutionTest {
         assertThat(fixture.tool.executions()).isZero();
     }
 
+    @Test
+    void cancellationBeforeToolGatePreventsExecutionAndJournalReservation() {
+        Fixture fixture = fixture(Scenario.CANCEL_BEFORE_GATE);
+
+        fixture.executor.execute(fixture.run.runId(), "worker-1", null);
+
+        assertThat(fixture.runtime.find(fixture.run.runId()).status())
+                .isEqualTo(AgentRunStatus.CANCELLED);
+        assertThat(fixture.tool.executions()).isZero();
+        assertThat(fixture.journal.find(fixture.run.runId(), "call-ready-1")).isNull();
+        assertThat(fixture.runtime.replayEvents(fixture.run.runId(), 0))
+                .extracting(AgentRunEvent::type)
+                .containsExactly(
+                        AgentRunEventType.RUN_CREATED,
+                        AgentRunEventType.RUN_STARTED,
+                        AgentRunEventType.MODEL_STARTED,
+                        AgentRunEventType.TOOL_CALL_REQUESTED,
+                        AgentRunEventType.TOOL_STARTED,
+                        AgentRunEventType.RUN_CANCELLED);
+    }
+
+    @Test
+    void cancellationAfterToolGatePreservesDurableToolResult() {
+        Fixture fixture = fixture(Scenario.CANCEL_AFTER_GATE);
+
+        fixture.executor.execute(fixture.run.runId(), "worker-1", null);
+
+        ToolExecutionJournalEntry journalEntry = fixture.journal.find(
+                fixture.run.runId(), "call-ready-1");
+        assertThat(fixture.runtime.find(fixture.run.runId()).status())
+                .isEqualTo(AgentRunStatus.CANCELLED);
+        assertThat(fixture.tool.executions()).isOne();
+        assertThat(journalEntry.status()).isEqualTo(ToolExecutionJournalEntry.Status.COMPLETED);
+        assertThat(journalEntry.resultStatus()).isEqualTo(ToolResult.Status.SUCCESS);
+        assertThat(fixture.runtime.replayEvents(fixture.run.runId(), 0))
+                .extracting(AgentRunEvent::type)
+                .containsExactly(
+                        AgentRunEventType.RUN_CREATED,
+                        AgentRunEventType.RUN_STARTED,
+                        AgentRunEventType.MODEL_STARTED,
+                        AgentRunEventType.TOOL_CALL_REQUESTED,
+                        AgentRunEventType.TOOL_STARTED,
+                        AgentRunEventType.RUN_CANCELLED);
+    }
+
     private Fixture fixture(Scenario scenario) {
         ObjectMapper objectMapper = new ObjectMapper();
         Clock clock = Clock.fixed(
@@ -88,6 +135,8 @@ class AgentRuntimePipelineExecutionTest {
                 new AgentRuntimeProperties(), objectMapper, clock);
         AgentTraceRecorder recorder = new AgentTraceRecorder(
                 new InMemoryAgentTraceRepository(), sanitizer);
+        AgentCancellationService cancellationService = new AgentCancellationService(
+                runtime, recorder, sanitizer);
         CountingTool tool = new CountingTool();
         AtomicBoolean approvalRequired = new AtomicBoolean(false);
         InMemoryToolExecutionJournalRepository journalRepository =
@@ -101,6 +150,24 @@ class AgentRuntimePipelineExecutionTest {
                 journalRepository,
                 new RunFencedToolExecutionStartGate(runRepository, journalRepository),
                 clock);
+        ActorIdentity owner = ActorIdentity.user("pipeline-user");
+        AgentRun run = runtime.create(
+                owner,
+                "session-pipeline", "conversation-pipeline",
+                "trace-pipeline", "use public tool");
+        recorder.startTrace(
+                ActorIdentity.user("pipeline-user"), run.traceId(),
+                run.sessionId(), run.userMessage());
+        if (scenario == Scenario.CANCEL_AFTER_GATE) {
+            tool.beforeEffect(() -> {
+                ToolExecutionJournalEntry started = journalRepository.find(
+                        run.runId(), "call-ready-1");
+                assertThat(started.status()).isEqualTo(ToolExecutionJournalEntry.Status.STARTED);
+                assertThat(cancellationService.cancel(
+                        owner, run.runId(), "cancel after tool gate").newlyCancelled())
+                        .isTrue();
+            });
+        }
         LLMClient llm = mock(LLMClient.class);
         when(llm.runWithTools(
                 anyString(), anyString(), anyString(), any(AgentExecutionObserver.class)))
@@ -119,6 +186,11 @@ class AgentRuntimePipelineExecutionTest {
                             ? "{\"value\":\"changed\"}"
                             : assessedArguments;
                     observer.toolStarted(1, "publicTool");
+                    if (scenario == Scenario.CANCEL_BEFORE_GATE) {
+                        assertThat(cancellationService.cancel(
+                                owner, run.runId(), "cancel before tool gate")
+                                .newlyCancelled()).isTrue();
+                    }
                     AgentObservation observation = observer.executeTool(
                             1, "call-ready-1", "publicTool", executionArguments);
                     observer.toolCompleted(
@@ -136,27 +208,23 @@ class AgentRuntimePipelineExecutionTest {
                 new AgentApprovalPauseService(
                         confirmationService, runtime, sanitizer, objectMapper),
                 new ToolConfirmationProperties(), pipeline);
-        AgentRun run = runtime.create(
-                ActorIdentity.user("pipeline-user"),
-                "session-pipeline", "conversation-pipeline",
-                "trace-pipeline", "use public tool");
-        recorder.startTrace(
-                ActorIdentity.user("pipeline-user"), run.traceId(),
-                run.sessionId(), run.userMessage());
-        return new Fixture(runtime, executor, run, tool);
+        return new Fixture(runtime, executor, run, tool, journalRepository);
     }
 
     private enum Scenario {
         NORMAL,
         CHANGED_ARGUMENTS,
-        POLICY_DRIFT
+        POLICY_DRIFT,
+        CANCEL_BEFORE_GATE,
+        CANCEL_AFTER_GATE
     }
 
     private record Fixture(
             AgentRuntimeService runtime,
             AgentRuntimeExecutor executor,
             AgentRun run,
-            CountingTool tool
+            CountingTool tool,
+            InMemoryToolExecutionJournalRepository journal
     ) {
     }
 
@@ -165,6 +233,8 @@ class AgentRuntimePipelineExecutionTest {
 
     private static final class CountingTool implements AgentTool<Input, ToolResult> {
         private final AtomicInteger executions = new AtomicInteger();
+        private final AtomicReference<Runnable> beforeEffect =
+                new AtomicReference<>(() -> { });
 
         @Override
         public ToolMetadata metadata() {
@@ -182,8 +252,13 @@ class AgentRuntimePipelineExecutionTest {
 
         @Override
         public ToolResult execute(Input input) {
+            beforeEffect.get().run();
             executions.incrementAndGet();
             return ToolResult.success(input.value());
+        }
+
+        void beforeEffect(Runnable callback) {
+            beforeEffect.set(callback);
         }
 
         int executions() {
