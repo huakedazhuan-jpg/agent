@@ -17,7 +17,9 @@ import com.hkdzagent.agent.tool.ToolExecutionJournalEntry;
 import com.hkdzagent.agent.tool.ToolExecutionJournalRepository;
 import com.hkdzagent.agent.tool.ToolInvocationContext;
 import com.hkdzagent.agent.tool.ToolResult;
+import com.hkdzagent.agent.trace.AgentTraceRecorder;
 import com.hkdzagent.agent.trace.AgentTraceSanitizer;
+import com.hkdzagent.agent.trace.InMemoryAgentTraceRepository;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,8 +42,11 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @Tag("postgres-integration")
 @EnabledIfEnvironmentVariable(named = "RUN_POSTGRES_INTEGRATION_TESTS", matches = "(?i)true")
@@ -164,6 +169,71 @@ class RealPostgresAgentRuntimeIntegrationTest {
         assertThat(runtimeRepository().findEventsAfter(created.runId(), 0, 10))
                 .extracting(AgentRunEvent::type)
                 .contains(AgentRunEventType.APPROVAL_REQUIRED);
+    }
+
+    @Test
+    void cancellationHoldingPostgresRunLockMakesConcurrentApprovalLose() throws Exception {
+        ApprovalCancellationScenario scenario = waitingApprovalScenario("cancel-wins");
+        scenario.confirmationRepository.blockNext(ToolConfirmation.Status.CANCELLED);
+        ExecutorService workers = Executors.newFixedThreadPool(2);
+        try {
+            Future<AgentRunCancellation> cancellation = workers.submit(() ->
+                    transaction().execute(status -> scenario.cancellationService.cancel(
+                            scenario.owner, scenario.run.runId(), "cancel wins")));
+            scenario.confirmationRepository.awaitBlocked();
+
+            Future<ToolConfirmation> approval = workers.submit(() ->
+                    scenario.runtime.decideWaitingApproval(
+                            scenario.run.runId(), scenario.approval.id(),
+                            () -> scenario.confirmationService.approve(scenario.approval.id())));
+
+            assertStillBlocked(approval);
+            scenario.confirmationRepository.releaseBlockedDecision();
+
+            assertThat(cancellation.get(5, TimeUnit.SECONDS).outcome())
+                    .isEqualTo(AgentRunCancellation.Outcome.CANCELLED);
+            assertThat(approval.get(5, TimeUnit.SECONDS)).isNull();
+            assertThat(scenario.runtime.find(scenario.run.runId()).status())
+                    .isEqualTo(AgentRunStatus.CANCELLED);
+            assertThat(scenario.confirmationService.findById(scenario.approval.id()).status())
+                    .isEqualTo(ToolConfirmation.Status.CANCELLED);
+        } finally {
+            scenario.confirmationRepository.releaseBlockedDecision();
+            workers.shutdownNow();
+        }
+    }
+
+    @Test
+    void approvalHoldingPostgresRunLockCommitsBeforeConcurrentCancellation() throws Exception {
+        ApprovalCancellationScenario scenario = waitingApprovalScenario("approval-wins");
+        scenario.confirmationRepository.blockNext(ToolConfirmation.Status.APPROVED);
+        ExecutorService workers = Executors.newFixedThreadPool(2);
+        try {
+            Future<ToolConfirmation> approval = workers.submit(() ->
+                    scenario.runtime.decideWaitingApproval(
+                            scenario.run.runId(), scenario.approval.id(),
+                            () -> scenario.confirmationService.approve(scenario.approval.id())));
+            scenario.confirmationRepository.awaitBlocked();
+
+            Future<AgentRunCancellation> cancellation = workers.submit(() ->
+                    transaction().execute(status -> scenario.cancellationService.cancel(
+                            scenario.owner, scenario.run.runId(), "cancel after approval")));
+
+            assertStillBlocked(cancellation);
+            scenario.confirmationRepository.releaseBlockedDecision();
+
+            assertThat(approval.get(5, TimeUnit.SECONDS).status())
+                    .isEqualTo(ToolConfirmation.Status.APPROVED);
+            assertThat(cancellation.get(5, TimeUnit.SECONDS).outcome())
+                    .isEqualTo(AgentRunCancellation.Outcome.CANCELLED);
+            assertThat(scenario.runtime.find(scenario.run.runId()).status())
+                    .isEqualTo(AgentRunStatus.CANCELLED);
+            assertThat(scenario.confirmationService.findById(scenario.approval.id()).status())
+                    .isEqualTo(ToolConfirmation.Status.APPROVED);
+        } finally {
+            scenario.confirmationRepository.releaseBlockedDecision();
+            workers.shutdownNow();
+        }
     }
 
     @Test
@@ -468,6 +538,49 @@ class RealPostgresAgentRuntimeIntegrationTest {
         );
     }
 
+    private ApprovalCancellationScenario waitingApprovalScenario(String label) {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        Clock clock = Clock.fixed(now, java.time.ZoneOffset.UTC);
+        AgentRuntimeService runtime = new AgentRuntimeService(
+                runtimeRepository(), new AgentRuntimeProperties(), new ObjectMapper(), clock);
+        BlockingToolConfirmationRepository confirmationRepository =
+                new BlockingToolConfirmationRepository(approvalRepository());
+        ToolConfirmationService confirmations = new ToolConfirmationService(
+                confirmationRepository, new AgentTraceSanitizer(160),
+                Duration.ofMinutes(15), clock);
+        ActorIdentity owner = ActorIdentity.user("postgres-approval-race-" + label);
+        AgentRun run = runtime.create(
+                owner, "postgres-race-session-" + label,
+                "postgres-race-conversation-" + label,
+                UUID.randomUUID().toString(), "run protected command");
+        AgentRunClaim claim = runtime.claim(run.runId(), "postgres-race-worker");
+        ToolConfirmation approval = confirmations.requestConfirmationForRun(
+                owner, run.sessionId(), run.traceId(), run.runId(),
+                "commandExecuteTool", "{\"command\":\"mvn test\"}");
+        runtime.waitForApproval(
+                run.runId(), claim.run().leaseOwner(), claim.run().leaseEpoch(),
+                approval.id(), "{\"step\":1}");
+        AgentTraceSanitizer sanitizer = new AgentTraceSanitizer(160);
+        AgentCancellationService cancellationService = new AgentCancellationService(
+                runtime,
+                new AgentTraceRecorder(new InMemoryAgentTraceRepository(), sanitizer),
+                sanitizer,
+                confirmations);
+        return new ApprovalCancellationScenario(
+                owner, run, approval, runtime, confirmations,
+                confirmationRepository, cancellationService);
+    }
+
+    private TransactionTemplate transaction() {
+        return new TransactionTemplate(
+                new DataSourceTransactionManager(runtimeDataSource));
+    }
+
+    private void assertStillBlocked(Future<?> future) {
+        assertThatThrownBy(() -> future.get(200, TimeUnit.MILLISECONDS))
+                .isInstanceOf(TimeoutException.class);
+    }
+
     private JdbcToolConfirmationRepository approvalRepository() {
         return new JdbcToolConfirmationRepository(
                 new NamedParameterJdbcTemplate(runtimeDataSource), new ObjectMapper());
@@ -497,5 +610,16 @@ class RealPostgresAgentRuntimeIntegrationTest {
     private String environment(String name, String defaultValue) {
         String value = System.getenv(name);
         return value == null || value.isBlank() ? defaultValue : value;
+    }
+
+    private record ApprovalCancellationScenario(
+            ActorIdentity owner,
+            AgentRun run,
+            ToolConfirmation approval,
+            AgentRuntimeService runtime,
+            ToolConfirmationService confirmationService,
+            BlockingToolConfirmationRepository confirmationRepository,
+            AgentCancellationService cancellationService
+    ) {
     }
 }
