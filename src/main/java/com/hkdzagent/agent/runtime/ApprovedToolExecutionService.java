@@ -46,6 +46,10 @@ public class ApprovedToolExecutionService {
                 || result.status() == ToolPipelineResult.Status.APPROVAL_REQUIRED) {
             throw new IllegalStateException("approved tool invocation was not executed");
         }
+        if (result.status() == ToolPipelineResult.Status.EXECUTION_UNCERTAIN) {
+            throw new IllegalStateException(
+                    "approved tool execution outcome is uncertain: " + result.reason());
+        }
         if (result.toolResult() == null) {
             throw new SecurityException("approved tool invocation was rejected: " + result.reason());
         }

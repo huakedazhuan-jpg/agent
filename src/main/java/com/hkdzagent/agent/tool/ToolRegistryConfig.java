@@ -106,9 +106,11 @@ public class ToolRegistryConfig {
     @Bean
     public ToolExecutionPipeline toolExecutionPipeline(
             ToolInvocationValidator validator,
-            ToolPolicyEngine policyEngine
+            ToolPolicyEngine policyEngine,
+            ToolExecutionJournalRepository journalRepository
     ) {
-        return new ToolExecutionPipeline(validator, policyEngine);
+        return new ToolExecutionPipeline(
+                validator, policyEngine, journalRepository, java.time.Clock.systemUTC());
     }
 
     public record FileRequest(

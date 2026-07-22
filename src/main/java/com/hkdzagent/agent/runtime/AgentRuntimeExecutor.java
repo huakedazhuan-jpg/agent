@@ -378,6 +378,8 @@ public class AgentRuntimeExecutor {
                 case APPROVAL_REQUIRED -> true;
                 case REJECTED, FAILED -> throw new IllegalArgumentException(
                         "tool invocation rejected: " + assessment.reason());
+                case EXECUTION_UNCERTAIN -> throw new IllegalStateException(
+                        "tool assessment unexpectedly returned uncertain execution state");
                 case COMPLETED -> throw new IllegalStateException(
                         "tool assessment must not execute the tool");
             };
@@ -458,6 +460,10 @@ public class AgentRuntimeExecutor {
                     || result.status() == ToolPipelineResult.Status.APPROVAL_REQUIRED) {
                 throw new IllegalStateException(
                         "tool policy changed after the execution assessment");
+            }
+            if (result.status() == ToolPipelineResult.Status.EXECUTION_UNCERTAIN) {
+                throw new IllegalStateException(
+                        "tool execution outcome is uncertain: " + result.reason());
             }
             if (result.toolResult() == null) {
                 throw new SecurityException("tool invocation was rejected: " + result.reason());

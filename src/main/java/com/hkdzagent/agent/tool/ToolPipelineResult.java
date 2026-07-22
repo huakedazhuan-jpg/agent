@@ -14,7 +14,8 @@ public record ToolPipelineResult(
         COMPLETED,
         APPROVAL_REQUIRED,
         REJECTED,
-        FAILED
+        FAILED,
+        EXECUTION_UNCERTAIN
     }
 
     static ToolPipelineResult from(
@@ -40,5 +41,12 @@ public record ToolPipelineResult(
 
     static ToolPipelineResult ready(ValidatedToolInvocation<?, ?> invocation) {
         return from(invocation, Status.READY, null, null);
+    }
+
+    static ToolPipelineResult executionUncertain(
+            ValidatedToolInvocation<?, ?> invocation,
+            String reason
+    ) {
+        return from(invocation, Status.EXECUTION_UNCERTAIN, null, reason);
     }
 }

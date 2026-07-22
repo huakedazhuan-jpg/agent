@@ -43,12 +43,15 @@ class ApprovedToolExecutionServiceTest {
 
         ApprovedToolExecution execution = fixture.service.execute(
                 fixture.runningRun, APPROVAL_ID);
+        ApprovedToolExecution replay = fixture.service.execute(
+                fixture.runningRun, APPROVAL_ID);
 
         assertThat(execution.step()).isOne();
         assertThat(execution.toolCallId()).isEqualTo("call-1");
         assertThat(execution.observation().toolName()).isEqualTo("writeFile");
         assertThat(execution.observation().content()).isEqualTo("approved");
         assertThat(execution.observation().success()).isTrue();
+        assertThat(replay.observation()).isEqualTo(execution.observation());
         assertThat(fixture.tool.executions()).isOne();
     }
 

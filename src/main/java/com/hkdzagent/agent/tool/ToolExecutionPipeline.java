@@ -1,13 +1,30 @@
 package com.hkdzagent.agent.tool;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.util.UUID;
+
 public class ToolExecutionPipeline {
 
     private final ToolInvocationValidator validator;
     private final ToolPolicyEngine policyEngine;
+    private final ToolExecutionJournalRepository journalRepository;
+    private final Clock clock;
 
     public ToolExecutionPipeline(ToolInvocationValidator validator, ToolPolicyEngine policyEngine) {
+        this(validator, policyEngine, new InMemoryToolExecutionJournalRepository(), Clock.systemUTC());
+    }
+
+    public ToolExecutionPipeline(
+            ToolInvocationValidator validator,
+            ToolPolicyEngine policyEngine,
+            ToolExecutionJournalRepository journalRepository,
+            Clock clock
+    ) {
         this.validator = validator;
         this.policyEngine = policyEngine;
+        this.journalRepository = journalRepository;
+        this.clock = clock;
     }
 
     public ToolPipelineResult invoke(
@@ -84,27 +101,68 @@ public class ToolExecutionPipeline {
 
     @SuppressWarnings({"rawtypes", "unchecked"})
     private ToolPipelineResult execute(ValidatedToolInvocation invocation) {
-        try {
-            ToolResult result = (ToolResult) invocation.tool().execute(invocation.input());
-            if (result == null) {
-                return ToolPipelineResult.from(
-                        invocation, ToolPipelineResult.Status.FAILED, null, "tool returned no result");
+        Instant startedAt = clock.instant();
+        ToolExecutionJournalEntry candidate = ToolExecutionJournalEntry.started(
+                invocation.context(),
+                invocation.metadata().name(),
+                invocation.metadata().version(),
+                invocation.argumentsHash(),
+                UUID.randomUUID().toString(),
+                startedAt);
+        ToolExecutionJournalRepository.Reservation reservation =
+                journalRepository.reserve(candidate);
+        ToolExecutionJournalEntry journalEntry = reservation.entry();
+        if (!candidate.hasSameBinding(journalEntry)) {
+            return ToolPipelineResult.from(
+                    invocation, ToolPipelineResult.Status.REJECTED, null,
+                    "tool call id is already bound to a different invocation");
+        }
+        if (!reservation.acquired()) {
+            if (journalEntry.status() == ToolExecutionJournalEntry.Status.COMPLETED) {
+                return fromJournal(invocation, journalEntry);
             }
-            ToolPipelineResult.Status status = switch (result.status()) {
-                case SUCCESS -> ToolPipelineResult.Status.COMPLETED;
-                case REJECTED -> ToolPipelineResult.Status.REJECTED;
-                case FAILED -> ToolPipelineResult.Status.FAILED;
-            };
-            return ToolPipelineResult.from(invocation, status, result,
-                    status == ToolPipelineResult.Status.COMPLETED ? null : result.message());
+            return ToolPipelineResult.executionUncertain(
+                    invocation,
+                    "tool execution was previously started but has no durable result");
+        }
+
+        ToolResult result;
+        try {
+            result = (ToolResult) invocation.tool().execute(invocation.input());
+            if (result == null) {
+                result = ToolResult.failure("tool returned no result");
+            }
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            return ToolPipelineResult.from(
-                    invocation, ToolPipelineResult.Status.FAILED, null, "tool execution was interrupted");
+            result = ToolResult.failure("tool execution was interrupted");
         } catch (Exception exception) {
-            return ToolPipelineResult.from(
-                    invocation, ToolPipelineResult.Status.FAILED, null, "tool execution failed: " + exception.getMessage());
+            result = ToolResult.failure("tool execution failed: " + exception.getMessage());
         }
+
+        ToolExecutionJournalEntry completed = journalRepository.complete(
+                candidate.runId(), candidate.toolCallId(), candidate.executionToken(),
+                result, clock.instant());
+        if (completed == null) {
+            return ToolPipelineResult.executionUncertain(
+                    invocation,
+                    "tool finished but its durable result could not be committed");
+        }
+        return fromJournal(invocation, completed);
+    }
+
+    private ToolPipelineResult fromJournal(
+            ValidatedToolInvocation<?, ?> invocation,
+            ToolExecutionJournalEntry entry
+    ) {
+        ToolResult result = new ToolResult(entry.resultStatus(), entry.resultMessage());
+        ToolPipelineResult.Status status = switch (result.status()) {
+            case SUCCESS -> ToolPipelineResult.Status.COMPLETED;
+            case REJECTED -> ToolPipelineResult.Status.REJECTED;
+            case FAILED -> ToolPipelineResult.Status.FAILED;
+        };
+        return ToolPipelineResult.from(
+                invocation, status, result,
+                status == ToolPipelineResult.Status.COMPLETED ? null : result.message());
     }
 
     private record PreparedInvocation(
