@@ -67,6 +67,20 @@ public class JdbcToolExecutionJournalRepository implements ToolExecutionJournalR
     }
 
     @Override
+    public ToolExecutionJournalEvidence summarize(String runId) {
+        return jdbcTemplate.queryForObject("""
+                SELECT
+                    COUNT(*) FILTER (WHERE status = 'STARTED') AS started_count,
+                    COUNT(*) FILTER (WHERE status = 'COMPLETED') AS completed_count
+                FROM tool_execution_journal
+                WHERE run_id = :runId
+                """, new MapSqlParameterSource("runId", UUID.fromString(runId)),
+                (rs, rowNum) -> new ToolExecutionJournalEvidence(
+                        Math.toIntExact(rs.getLong("started_count")),
+                        Math.toIntExact(rs.getLong("completed_count"))));
+    }
+
+    @Override
     public ToolExecutionJournalEntry complete(
             String runId,
             String toolCallId,

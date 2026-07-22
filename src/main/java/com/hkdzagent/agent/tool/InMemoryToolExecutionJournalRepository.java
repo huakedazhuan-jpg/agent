@@ -25,6 +25,20 @@ public class InMemoryToolExecutionJournalRepository implements ToolExecutionJour
     }
 
     @Override
+    public ToolExecutionJournalEvidence summarize(String runId) {
+        long started = entries.values().stream()
+                .filter(entry -> entry.runId().equals(runId))
+                .filter(entry -> entry.status() == ToolExecutionJournalEntry.Status.STARTED)
+                .count();
+        long completed = entries.values().stream()
+                .filter(entry -> entry.runId().equals(runId))
+                .filter(entry -> entry.status() == ToolExecutionJournalEntry.Status.COMPLETED)
+                .count();
+        return new ToolExecutionJournalEvidence(
+                Math.toIntExact(started), Math.toIntExact(completed));
+    }
+
+    @Override
     public ToolExecutionJournalEntry complete(
             String runId,
             String toolCallId,

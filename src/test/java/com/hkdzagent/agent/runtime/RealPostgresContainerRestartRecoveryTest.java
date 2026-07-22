@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hkdzagent.agent.console.JdbcToolConfirmationRepository;
 import com.hkdzagent.agent.console.ToolConfirmation;
 import com.hkdzagent.agent.security.ActorIdentity;
+import com.hkdzagent.agent.tool.JdbcToolExecutionJournalRepository;
+import com.hkdzagent.agent.tool.ToolExecutionJournalEntry;
+import com.hkdzagent.agent.tool.ToolInvocationContext;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -16,6 +19,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -27,6 +31,7 @@ class RealPostgresContainerRestartRecoveryTest {
     private static final String SCHEMA = "runtime_restart_it";
     private static final String RUN_ID = "00000000-0000-0000-0000-000000000041";
     private static final String APPROVAL_ID = "00000000-0000-0000-0000-000000000042";
+    private static final String TOOL_EXECUTION_TOKEN = "00000000-0000-0000-0000-000000000043";
 
     @Test
     void provesRuntimeStateSurvivesDatabaseProcessRestart() {
@@ -106,6 +111,15 @@ class RealPostgresContainerRestartRecoveryTest {
                 "{\"approvalId\":\"" + APPROVAL_ID + "\"}",
                 now.plusSeconds(1)
         );
+        JdbcToolExecutionJournalRepository toolJournal =
+                toolJournalRepository(database.runtimeDataSource());
+        ToolExecutionJournalEntry uncertainExecution = ToolExecutionJournalEntry.started(
+                new ToolInvocationContext(
+                        created.ownerKey(), created.runId(), created.traceId(),
+                        "restart-tool-call", Set.of()),
+                "commandExecuteTool", "1.0.0", "c".repeat(64),
+                TOOL_EXECUTION_TOKEN, now.plusSeconds(2));
+        assertThat(toolJournal.reserve(uncertainExecution).acquired()).isTrue();
 
         assertThat(waiting.status()).isEqualTo(AgentRunStatus.WAITING_APPROVAL);
         assertThat(waiting.leaseOwner()).isNull();
@@ -142,8 +156,21 @@ class RealPostgresContainerRestartRecoveryTest {
             assertThat(pending.toolVersion()).isEqualTo("1.0.0");
             assertThat(pending.toolCallId()).isEqualTo("restart-call");
             assertThat(pending.argumentsHash()).isEqualTo("b".repeat(64));
-
             Instant decidedAt = Instant.now();
+            JdbcToolExecutionJournalRepository toolJournal =
+                    toolJournalRepository(database.runtimeDataSource());
+            assertThat(toolJournal.summarize(RUN_ID).startedExecutions()).isOne();
+            ToolExecutionJournalEntry durableUncertain = toolJournal.find(
+                    RUN_ID, "restart-tool-call");
+            assertThat(durableUncertain.executionToken()).isEqualTo(TOOL_EXECUTION_TOKEN);
+            assertThat(toolJournal.reserve(ToolExecutionJournalEntry.started(
+                    new ToolInvocationContext(
+                            waiting.ownerKey(), waiting.runId(), waiting.traceId(),
+                            "restart-tool-call", Set.of()),
+                    "commandExecuteTool", "1.0.0", "c".repeat(64),
+                    "00000000-0000-0000-0000-000000000044", decidedAt)).acquired())
+                    .isFalse();
+
             assertThat(approvals.decidePending(
                     APPROVAL_ID, ToolConfirmation.Status.APPROVED, "approved after restart", decidedAt
             )).isNotNull();
@@ -167,7 +194,7 @@ class RealPostgresContainerRestartRecoveryTest {
             assertThat(jdbc.queryForObject(
                     "SELECT MAX(CAST(version AS INTEGER)) FROM flyway_schema_history WHERE success",
                     Integer.class
-            )).isGreaterThanOrEqualTo(9);
+            )).isGreaterThanOrEqualTo(15);
         } finally {
             database.adminJdbc().execute("DROP SCHEMA IF EXISTS " + SCHEMA + " CASCADE");
         }
@@ -193,6 +220,14 @@ class RealPostgresContainerRestartRecoveryTest {
     private JdbcToolConfirmationRepository approvalRepository(DriverManagerDataSource dataSource) {
         return new JdbcToolConfirmationRepository(
                 new NamedParameterJdbcTemplate(dataSource), new ObjectMapper());
+    }
+
+    private JdbcToolExecutionJournalRepository toolJournalRepository(
+            DriverManagerDataSource dataSource
+    ) {
+        return new JdbcToolExecutionJournalRepository(
+                new NamedParameterJdbcTemplate(dataSource),
+                new TransactionTemplate(new DataSourceTransactionManager(dataSource)));
     }
 
     private Database database() {

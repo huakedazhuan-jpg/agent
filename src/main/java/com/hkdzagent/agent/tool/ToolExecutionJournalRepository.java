@@ -8,6 +8,8 @@ public interface ToolExecutionJournalRepository {
 
     ToolExecutionJournalEntry find(String runId, String toolCallId);
 
+    ToolExecutionJournalEvidence summarize(String runId);
+
     ToolExecutionJournalEntry complete(
             String runId,
             String toolCallId,

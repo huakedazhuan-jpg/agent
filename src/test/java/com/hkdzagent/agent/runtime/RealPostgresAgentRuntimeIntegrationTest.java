@@ -267,6 +267,11 @@ class RealPostgresAgentRuntimeIntegrationTest {
                     run.runId(), context.toolCallId(), stored.executionToken(),
                     ToolResult.success("done"), now.plusSeconds(2)).status())
                     .isEqualTo(ToolExecutionJournalEntry.Status.COMPLETED);
+            assertThat(toolJournalRepository().summarize(run.runId()))
+                    .satisfies(evidence -> {
+                        assertThat(evidence.startedExecutions()).isZero();
+                        assertThat(evidence.completedExecutions()).isOne();
+                    });
         } finally {
             workers.shutdownNow();
         }

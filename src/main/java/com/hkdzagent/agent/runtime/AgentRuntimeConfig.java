@@ -7,6 +7,7 @@ import com.hkdzagent.agent.trace.AgentTraceSanitizer;
 import com.hkdzagent.agent.console.ToolConfirmationProperties;
 import com.hkdzagent.agent.console.ToolConfirmationService;
 import com.hkdzagent.agent.tool.ToolExecutionPipeline;
+import com.hkdzagent.agent.tool.ToolExecutionJournalRepository;
 import com.hkdzagent.agent.im.FeishuResultOutboxService;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -157,12 +158,13 @@ public class AgentRuntimeConfig {
             AgentRuntimeExecutor runtimeExecutor,
             AgentFailureService failureService,
             AgentRunRecoveryClassifier classifier,
+            ToolExecutionJournalRepository toolJournal,
             AgentRuntimeProperties properties,
             @Qualifier("agentRuntimeTaskExecutor") Executor executor
     ) {
         return new AgentRunRecoveryService(
                 runtimeService, runtimeExecutor, failureService,
-                classifier, properties, executor);
+                classifier, toolJournal, properties, executor);
     }
 
     @Bean

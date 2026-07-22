@@ -3,6 +3,10 @@ package com.hkdzagent.agent.runtime;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hkdzagent.agent.im.FeishuResultOutboxService;
 import com.hkdzagent.agent.security.ActorIdentity;
+import com.hkdzagent.agent.tool.InMemoryToolExecutionJournalRepository;
+import com.hkdzagent.agent.tool.ToolExecutionJournalEntry;
+import com.hkdzagent.agent.tool.ToolInvocationContext;
+import com.hkdzagent.agent.tool.ToolResult;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
@@ -10,6 +14,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.UUID;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -59,13 +64,49 @@ class AgentRunRecoveryServiceTest {
                 any(AgentRun.class), any(String.class), any());
         AgentRun failed = fixture.runtime.find(fixture.run.runId());
         assertThat(failed.status()).isEqualTo(AgentRunStatus.FAILED);
-        assertThat(failed.errorMessage()).contains("tool side effect");
+        assertThat(failed.errorMessage()).contains("without journal evidence");
         assertThat(fixture.runtime.replayEvents(fixture.run.runId(), 0))
                 .extracting(AgentRunEvent::type)
                 .containsSubsequence(
                         AgentRunEventType.TOOL_STARTED,
                         AgentRunEventType.RUN_RECOVERY_BLOCKED,
                         AgentRunEventType.RUN_FAILED);
+    }
+
+    @Test
+    void blocksUncertainJournalEntryEvenWhenToolStartedEventWasNotWritten() {
+        Fixture fixture = fixture(3);
+        fixture.journal.reserve(journalEntry(fixture.run, "approval-call"));
+
+        assertThat(fixture.service.recoverExpiredRuns()).isOne();
+
+        verify(fixture.executor, never()).executeClaimed(
+                any(AgentRun.class), any(String.class), any());
+        AgentRun failed = fixture.runtime.find(fixture.run.runId());
+        assertThat(failed.status()).isEqualTo(AgentRunStatus.FAILED);
+        assertThat(failed.errorMessage()).contains("no durable result");
+        assertThat(fixture.runtime.replayEvents(fixture.run.runId(), 0))
+                .filteredOn(event -> event.type() == AgentRunEventType.RUN_RECOVERY_BLOCKED)
+                .singleElement()
+                .satisfies(event -> assertThat(event.payloadJson())
+                        .contains("BLOCKED_TOOL_EXECUTION_UNCERTAIN", "\"journalStarted\":1"));
+    }
+
+    @Test
+    void blocksCompletedToolUntilDurableModelCheckpointExists() {
+        Fixture fixture = fixture(3);
+        ToolExecutionJournalEntry started = journalEntry(fixture.run, "completed-call");
+        fixture.journal.reserve(started);
+        fixture.journal.complete(
+                started.runId(), started.toolCallId(), started.executionToken(),
+                ToolResult.success("done"), startedAt.plusSeconds(2));
+
+        assertThat(fixture.service.recoverExpiredRuns()).isOne();
+
+        verify(fixture.executor, never()).executeClaimed(
+                any(AgentRun.class), any(String.class), any());
+        AgentRun failed = fixture.runtime.find(fixture.run.runId());
+        assertThat(failed.errorMessage()).contains("durable model checkpoint");
     }
 
     @Test
@@ -104,18 +145,29 @@ class AgentRunRecoveryServiceTest {
         AgentRun claimed = repository.claim(
                 stored.runId(), "original-worker", startedAt, Duration.ofSeconds(30)).run();
         AgentRuntimeExecutor runtimeExecutor = mock(AgentRuntimeExecutor.class);
+        InMemoryToolExecutionJournalRepository journal =
+                new InMemoryToolExecutionJournalRepository();
         AgentFailureService failureService = new AgentFailureService(
                 runtime, mock(FeishuResultOutboxService.class));
         AgentRunRecoveryService service = new AgentRunRecoveryService(
                 runtime, runtimeExecutor, failureService,
-                new AgentRunRecoveryClassifier(), properties, Runnable::run);
-        return new Fixture(repository, runtime, runtimeExecutor, service, claimed);
+                new AgentRunRecoveryClassifier(), journal, properties, Runnable::run);
+        return new Fixture(repository, runtime, runtimeExecutor, journal, service, claimed);
+    }
+
+    private ToolExecutionJournalEntry journalEntry(AgentRun run, String toolCallId) {
+        return ToolExecutionJournalEntry.started(
+                new ToolInvocationContext(
+                        run.ownerKey(), run.runId(), run.traceId(), toolCallId, Set.of()),
+                "writeFile", "1.0.0", "a".repeat(64),
+                UUID.randomUUID().toString(), startedAt.plusSeconds(1));
     }
 
     private record Fixture(
             InMemoryAgentRunRepository repository,
             AgentRuntimeService runtime,
             AgentRuntimeExecutor executor,
+            InMemoryToolExecutionJournalRepository journal,
             AgentRunRecoveryService service,
             AgentRun run
     ) {
