@@ -12,6 +12,11 @@ import com.hkdzagent.agent.im.FeishuInboxEvent;
 import com.hkdzagent.agent.im.JdbcFeishuEventInboxRepository;
 import com.hkdzagent.agent.im.JdbcFeishuResultOutboxRepository;
 import com.hkdzagent.agent.security.ActorIdentity;
+import com.hkdzagent.agent.tool.JdbcToolExecutionJournalRepository;
+import com.hkdzagent.agent.tool.ToolExecutionJournalEntry;
+import com.hkdzagent.agent.tool.ToolExecutionJournalRepository;
+import com.hkdzagent.agent.tool.ToolInvocationContext;
+import com.hkdzagent.agent.tool.ToolResult;
 import com.hkdzagent.agent.trace.AgentTraceSanitizer;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;
@@ -29,6 +34,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
@@ -218,6 +224,55 @@ class RealPostgresAgentRuntimeIntegrationTest {
     }
 
     @Test
+    void concurrentToolJournalReservationsProduceOneExecutionOwner() throws Exception {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        AgentRun run = runtimeRepository().create(AgentRun.created(
+                UUID.randomUUID().toString(), ActorIdentity.user("journal-user"),
+                "journal-session", "journal-conversation", UUID.randomUUID().toString(),
+                "execute once", 5, now), "{}");
+        ToolInvocationContext context = new ToolInvocationContext(
+                run.ownerKey(), run.runId(), run.traceId(), "call-journal-1", Set.of());
+        ToolExecutionJournalEntry first = ToolExecutionJournalEntry.started(
+                context, "writeFile", "1.0.0", "a".repeat(64),
+                UUID.randomUUID().toString(), now);
+        ToolExecutionJournalEntry second = ToolExecutionJournalEntry.started(
+                context, "writeFile", "1.0.0", "a".repeat(64),
+                UUID.randomUUID().toString(), now);
+        JdbcToolExecutionJournalRepository firstRepository = toolJournalRepository();
+        JdbcToolExecutionJournalRepository secondRepository = toolJournalRepository();
+        CyclicBarrier start = new CyclicBarrier(2);
+        ExecutorService workers = Executors.newFixedThreadPool(2);
+        try {
+            Future<ToolExecutionJournalRepository.Reservation> one = workers.submit(() -> {
+                start.await();
+                return firstRepository.reserve(first);
+            });
+            Future<ToolExecutionJournalRepository.Reservation> two = workers.submit(() -> {
+                start.await();
+                return secondRepository.reserve(second);
+            });
+
+            List<ToolExecutionJournalRepository.Reservation> reservations =
+                    List.of(one.get(), two.get());
+            assertThat(reservations).filteredOn(
+                    ToolExecutionJournalRepository.Reservation::acquired).hasSize(1);
+            ToolExecutionJournalEntry stored = toolJournalRepository().find(
+                    run.runId(), context.toolCallId());
+            assertThat(reservations).extracting(reservation -> reservation.entry().executionToken())
+                    .containsOnly(stored.executionToken());
+            assertThat(toolJournalRepository().complete(
+                    run.runId(), context.toolCallId(), UUID.randomUUID().toString(),
+                    ToolResult.success("stale"), now.plusSeconds(1))).isNull();
+            assertThat(toolJournalRepository().complete(
+                    run.runId(), context.toolCallId(), stored.executionToken(),
+                    ToolResult.success("done"), now.plusSeconds(2)).status())
+                    .isEqualTo(ToolExecutionJournalEntry.Status.COMPLETED);
+        } finally {
+            workers.shutdownNow();
+        }
+    }
+
+    @Test
     void persistsFeishuEventRunBindingAndFencesStaleInboxClaim() {
         Instant now = Instant.parse("2026-01-01T00:00:00Z");
         AgentRun run = runtimeRepository().create(AgentRun.created(
@@ -396,7 +451,7 @@ class RealPostgresAgentRuntimeIntegrationTest {
         assertThat(new JdbcTemplate(runtimeDataSource).queryForObject(
                 "SELECT MAX(CAST(version AS INTEGER)) FROM flyway_schema_history WHERE success",
                 Integer.class
-        )).isGreaterThanOrEqualTo(14);
+        )).isGreaterThanOrEqualTo(15);
         assertThat(waiting).isNotNull();
     }
 
@@ -411,6 +466,12 @@ class RealPostgresAgentRuntimeIntegrationTest {
     private JdbcToolConfirmationRepository approvalRepository() {
         return new JdbcToolConfirmationRepository(
                 new NamedParameterJdbcTemplate(runtimeDataSource), new ObjectMapper());
+    }
+
+    private JdbcToolExecutionJournalRepository toolJournalRepository() {
+        return new JdbcToolExecutionJournalRepository(
+                new NamedParameterJdbcTemplate(runtimeDataSource),
+                new TransactionTemplate(new DataSourceTransactionManager(runtimeDataSource)));
     }
 
     private JdbcFeishuResultOutboxRepository outboxRepository() {
