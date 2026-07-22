@@ -151,17 +151,22 @@ public class AgentRuntimeExecutor {
             emitWorker(run, workerId, AgentRunEventType.RUN_STARTED,
                     Map.of("workerId", workerId), eventConsumer);
             RuntimeObserver observer = new RuntimeObserver(run, workerId, heartbeat, eventConsumer);
+            assertExecutionActive(run, workerId, heartbeat);
             AgentLoopResult result = llmClient.runWithTools(
                     run.userMessage(), run.conversationId(), run.traceId(), observer);
-            assertHeartbeat(heartbeat);
+            if (result.status() != AgentLoopResult.Status.WAITING_APPROVAL) {
+                assertExecutionActive(run, workerId, heartbeat);
+            }
             handleResult(run, workerId, result, eventConsumer);
+        } catch (AgentRunCancelledException exception) {
+            return;
         } catch (AgentRunLeaseLostException exception) {
+            if (isCancelled(run.runId())) {
+                return;
+            }
             throw exception;
         } catch (Exception exception) {
-            AgentRunEvent event = failExecution(
-                    run, workerId, sanitizer.preview(safeMessage(exception)));
-            accept(event, eventConsumer);
-            recordFailureTrace(run, safeMessage(exception));
+            failUnlessCancelled(run, workerId, exception, eventConsumer);
         }
     }
 
@@ -182,17 +187,22 @@ public class AgentRuntimeExecutor {
             }
             ApprovedToolExecution approvedExecution =
                     approvedToolExecutionService.execute(run, approvalId);
+            assertExecutionActive(run, workerId, heartbeat);
             AgentLoopResult result = llmClient.resumeWithApprovedTool(
                     run.checkpointJson(), approvedExecution.observation(), observer);
-            assertHeartbeat(heartbeat);
+            if (result.status() != AgentLoopResult.Status.WAITING_APPROVAL) {
+                assertExecutionActive(run, workerId, heartbeat);
+            }
             handleResult(run, workerId, result, eventConsumer);
+        } catch (AgentRunCancelledException exception) {
+            return;
         } catch (AgentRunLeaseLostException exception) {
+            if (isCancelled(run.runId())) {
+                return;
+            }
             throw exception;
         } catch (Exception exception) {
-            AgentRunEvent event = failExecution(
-                    run, workerId, sanitizer.preview(safeMessage(exception)));
-            accept(event, eventConsumer);
-            recordFailureTrace(run, safeMessage(exception));
+            failUnlessCancelled(run, workerId, exception, eventConsumer);
         }
     }
 
@@ -240,6 +250,29 @@ public class AgentRuntimeExecutor {
                 run.runId(), AgentRunEventType.RUN_FAILED, Map.of("error", normalized));
     }
 
+    private void failUnlessCancelled(
+            AgentRun run,
+            String workerId,
+            Exception exception,
+            Consumer<AgentRunEvent> eventConsumer
+    ) {
+        if (isCancelled(run.runId())) {
+            return;
+        }
+        AgentRunEvent event;
+        try {
+            event = failExecution(
+                    run, workerId, sanitizer.preview(safeMessage(exception)));
+        } catch (RuntimeException failure) {
+            if (isCancelled(run.runId())) {
+                return;
+            }
+            throw failure;
+        }
+        accept(event, eventConsumer);
+        recordFailureTrace(run, safeMessage(exception));
+    }
+
     private void recordFailureTrace(AgentRun run, String error) {
         try {
             traceRecorder.recordError(
@@ -268,6 +301,20 @@ public class AgentRuntimeExecutor {
         if (heartbeat != null) {
             heartbeat.assertActive();
         }
+    }
+
+    private void assertExecutionActive(
+            AgentRun run,
+            String workerId,
+            AgentRunLeaseHeartbeat heartbeat
+    ) {
+        assertHeartbeat(heartbeat);
+        runtimeService.assertExecutionActive(run.runId(), workerId, run.leaseEpoch());
+    }
+
+    private boolean isCancelled(String runId) {
+        AgentRun current = runtimeService.find(runId);
+        return current != null && current.status() == AgentRunStatus.CANCELLED;
     }
 
     private AgentRunEvent emitWorker(
@@ -315,7 +362,7 @@ public class AgentRuntimeExecutor {
 
         @Override
         public void modelStarted(int step) {
-            assertHeartbeat(heartbeat);
+            assertExecutionActive(run, workerId, heartbeat);
             runtimeService.checkpoint(
                     runId(), workerId, run.leaseEpoch(), step,
                     Map.of("phase", "MODEL", "step", step));
@@ -333,7 +380,7 @@ public class AgentRuntimeExecutor {
 
         @Override
         public void modelCompleted(int step) {
-            assertHeartbeat(heartbeat);
+            assertExecutionActive(run, workerId, heartbeat);
             emitWorker(run, workerId, AgentRunEventType.MODEL_COMPLETED,
                     Map.of("step", step), consumer);
         }

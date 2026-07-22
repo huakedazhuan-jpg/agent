@@ -81,6 +81,17 @@ public class AgentRuntimeService {
         return renewed;
     }
 
+    public AgentRun assertExecutionActive(String runId, String workerId, long leaseEpoch) {
+        AgentRun current = requireRun(runId);
+        if (current.status() == AgentRunStatus.CANCELLED) {
+            throw new AgentRunCancelledException("agent run was cancelled: " + runId);
+        }
+        if (!current.holdsLease(workerId, leaseEpoch, clock.instant())) {
+            throw new AgentRunLeaseLostException("agent run lease fence was lost");
+        }
+        return current;
+    }
+
     public AgentRun checkpoint(
             String runId, String workerId, long leaseEpoch, int step, Object checkpoint
     ) {
