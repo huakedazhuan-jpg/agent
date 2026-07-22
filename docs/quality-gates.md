@@ -19,11 +19,11 @@ The baseline job runs the complete default test suite and packages the applicati
 
 The database job starts a PostgreSQL 17 service container with a health check and then:
 
-1. Applies all available Flyway migrations (currently V1-V14) to an isolated schema.
-2. Verifies durable Agent Run, lease fencing and expiry, concurrent stale-run claiming, classified recovery, checkpoint, event ordering, approval recovery, and Feishu approval/final/failure notification-outbox persistence, statistics, dead-letter, and manual-retry behavior.
-3. Seeds a Run in `WAITING_APPROVAL` and records `pg_postmaster_start_time()`.
+1. Applies all available Flyway migrations (currently V1-V15) to an isolated schema.
+2. Verifies durable Agent Run, lease fencing and expiry, concurrent stale-run claiming, journal-aware recovery, atomic tool-execution reservation/completion, checkpoint, event ordering, approval recovery, and Feishu approval/final/failure notification-outbox persistence, statistics, dead-letter, and manual-retry behavior.
+3. Seeds a Run in `WAITING_APPROVAL`, an unfinished tool journal entry, and records `pg_postmaster_start_time()`.
 4. Restarts the actual PostgreSQL service process.
-5. Verifies that state survived the restart and that approval/resume remain exactly-once.
+5. Verifies that state survived the restart, approval decisions remain atomic, and the unfinished tool call cannot be reserved again.
 
 The CI credentials are fixed test-only values scoped to the ephemeral service container. The workflow
 does not require repository secrets.

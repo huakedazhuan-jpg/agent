@@ -2,7 +2,7 @@
 
 XingClaw Agent is a Spring Boot AI agent system focused on durable execution, tool calling, human approval, multi-user isolation, and external-channel integration.
 
-The repository contains a production-designed Agent Runtime with PostgreSQL persistence, real provider token streaming, restart-recoverable tool approval, fenced recovery of abandoned runs, JWT/RBAC, owner-scoped resources, and durable Feishu notifications. Real PostgreSQL 17 migration and database-process restart gates are implemented. It is suitable as a resume project, but should not be described as production-deployed: exactly-once recovery of arbitrary tool side effects, checkpoint encryption, load testing, complete observability, and deployment automation remain incomplete.
+The repository contains a production-designed Agent Runtime with PostgreSQL persistence, real provider token streaming, restart-recoverable tool approval, fenced recovery of abandoned runs, a durable tool-execution journal, JWT/RBAC, owner-scoped resources, and durable Feishu notifications. Real PostgreSQL 17 migration and database-process restart gates are implemented. It is suitable as a resume project, but should not be described as production-deployed: external exactly-once effects, post-tool model continuation checkpoints, checkpoint encryption, load testing, complete observability, and deployment automation remain incomplete.
 
 ## Current Status
 
@@ -34,7 +34,8 @@ Spring AI is pinned to the stable 1.1.x line because this project currently stay
 - Console SSE endpoint at `/api/agent/chat/stream`
   - Reads real provider SSE deltas and persists ordered Runtime events with replayable SSE IDs.
 - Durable Agent Runtime with state machine, optimistic versioning, fenced Worker leases, heartbeats, event replay, approval recovery, and classified recovery of expired `RUNNING` runs
-- Human-in-the-loop approval that pauses sensitive tools before execution and resumes the saved tool call exactly once after approval
+- Human-in-the-loop approval that pauses sensitive tools before execution, conditionally resumes the bound invocation, and uses the execution journal to prevent duplicate local submission
+- Durable tool-execution journal keyed by Run and provider tool-call ID, with binding validation, result replay, completion fencing, and conservative blocking of uncertain side effects
 - Agent trace with in-memory local adapter and optional PostgreSQL JDBC repository
 - Tool confirmation queue with in-memory local adapter and optional PostgreSQL JDBC repository, expiry, and atomic decisions
 - Chat memory with JSONL local adapter and optional PostgreSQL JDBC repository
@@ -241,7 +242,7 @@ $env:AGENT_SECURITY_BOOTSTRAP_ROLE = "ADMIN"
 
 The bootstrap account is inserted only when the username does not already exist; startup does not overwrite its password. See `docs/security.md` for endpoint policy and current limitations.
 
-See `docs/infrastructure.md` for the current infrastructure boundary.
+See `docs/infrastructure.md` for the infrastructure boundary and `docs/tool-execution-journal.md` for journal states, recovery decisions, and operator guidance.
 
 ## Build, Test, and Run
 
@@ -291,6 +292,7 @@ Current CI gate:
 - `./mvnw -B --no-transfer-progress -DskipTests package`
 - PostgreSQL 17 migration, repository reconstruction, and real database-process restart recovery tests
 - Concurrent expired-run recovery tests proving that only one PostgreSQL Worker can claim a stale lease
+- Tool-journal concurrency, crash-window, and PostgreSQL process-restart tests
 
 See `docs/quality-gates.md` for the current quality gate and known CI/CD gaps.
 
@@ -421,7 +423,7 @@ The following gaps are intentional tracking items for the production-grade upgra
 - Access tokens currently have no refresh, revocation, key rotation, or login rate limiting.
 - PostgreSQL/Redis/Flyway infrastructure exists, and Agent Runtime/trace/chat memory/tool approvals/Feishu inbox/notification outbox/admin audit have JDBC repository switches. Redis is configured but is not yet used by application logic.
 - Runtime and notification-outbox persistence are covered by H2 tests and real PostgreSQL 17 migration/recovery gates, including concurrent stale-run claiming and a database-process restart drill.
-- Approval decisions recover after restart, but there is no general scheduler for abandoned `RUNNING` runs. The Feishu inbox also does not yet bind an event ID to its created run ID, so a crash during execution can create a second run when the inbox retries.
+- Expired `RUNNING` runs are claimed by a recovery scheduler, and Feishu events are transactionally bound to their durable Run. Recovery after any tool activity remains deliberately manual because the project does not persist a complete post-tool model continuation checkpoint.
 - `CANCELLED` exists in the state model, but cancellation API, execution cooperation, persistence service, and tests are not implemented.
 - Provider checkpoints contain complete resume context and need production encryption plus retention cleanup.
 - Token events currently write individually; batching is needed before high-throughput deployment.
@@ -430,6 +432,7 @@ The following gaps are intentional tracking items for the production-grade upgra
 - CI runs unit/functional tests, packaging, PostgreSQL integration, and database restart recovery. Coverage thresholds, static analysis, container build, security scanning, and deployment gates are still missing.
 - Micrometer outbox gauges exist, but Runtime/model/tool latency metrics, dashboards, alert thresholds, and SLOs are not implemented.
 - Tool invocation validation and allow/approval/reject decisions exist, but production policy still needs environment- or tenant-specific administration and broader adversarial testing.
+- The local tool journal prevents duplicate submission for the same durable tool-call identity and replays recorded terminal results. It cannot guarantee strict exactly-once effects for an external API that does not honor an idempotency key; a crash after the external effect but before journal completion is surfaced as `EXECUTION_UNCERTAIN` and blocked.
 
 ## Production Upgrade Roadmap
 
@@ -451,6 +454,6 @@ The project is being upgraded in staged phases:
 
 Recommended current description:
 
-> A production-designed Spring Boot AI Agent system with a PostgreSQL-backed execution state machine, real SSE token streaming, restart-recoverable human approval, optimistic concurrency and Worker leases, JWT/RBAC, owner-scoped resources, durable Feishu event processing, and automated tests.
+> A production-designed Spring Boot AI Agent system with a PostgreSQL-backed execution state machine, real SSE token streaming, restart-recoverable human approval, a fenced tool-execution journal, Worker lease recovery, JWT/RBAC, owner-scoped resources, durable Feishu processing, and automated PostgreSQL restart tests.
 
-Do not yet claim production deployment, pgvector retrieval, complete observability, or proven high-concurrency capacity.
+Do not yet claim production deployment, arbitrary external exactly-once effects, automatic continuation after completed tools, pgvector retrieval, complete observability, or proven high-concurrency capacity.

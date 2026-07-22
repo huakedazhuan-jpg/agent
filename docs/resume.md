@@ -2,7 +2,7 @@
 
 ## One-line project description
 
-Built a production-designed Spring Boot AI Agent system with durable PostgreSQL execution state, real SSE token streaming, restart-recoverable tool approval, JWT/RBAC, and Feishu integration.
+Built a production-designed Spring Boot AI Agent system with durable PostgreSQL execution state, real SSE token streaming, restart-recoverable tool approval, a fenced tool-execution journal, JWT/RBAC, and Feishu integration.
 
 ## Resume bullets
 
@@ -13,6 +13,7 @@ Built a production-designed Spring Boot AI Agent system with durable PostgreSQL 
 - Hardened Feishu processing with a PostgreSQL inbox and notification outbox, event-to-Run binding, fenced processing claims, event/business-key deduplication, retries, stale-work recovery, dead letters, ADMIN retry, audit records, and low-cardinality metrics.
 - Maintained an automated Java test suite covering state transitions, JDBC repositories, transaction rollback, concurrency controls, streaming protocol parsing, approval recovery, API authorization, configuration safety, PostgreSQL 17 migrations, and database-process restart recovery.
 - Implemented lease-epoch fencing, heartbeat renewal, `SKIP LOCKED` stale-run claiming, bounded model-stage recovery, and conservative blocking when tool side effects are indeterminate.
+- Added a PostgreSQL tool-execution journal keyed by Run/tool-call ID with atomic reservation, argument/version binding, fenced completion, terminal-result replay, and journal-aware crash recovery; verified persistence across a real PostgreSQL process restart.
 
 ## Interview walkthrough
 
@@ -24,9 +25,11 @@ Explain the Runtime in this order:
 4. A sensitive tool call stores provider context and transitions the Run to `WAITING_APPROVAL` before tool execution.
 5. Approval atomically wins the pending decision and conditionally resumes the matching checkpoint; duplicate decisions cannot execute the tool twice.
 6. A recovery scheduler reconciles durable decisions if the process exits between approval and background execution.
+7. Every tool reserves a durable journal row before invocation; duplicate completed calls replay the stored result, while unfinished calls are blocked for investigation.
 
 ## Claims to avoid
 
 - Do not call the system production-deployed; the repository demonstrates production-oriented design and tests.
-- Describe abandoned-run recovery as classified and bounded: model-only runs can restart, while runs that reached tool execution are failed for manual investigation until a tool execution journal exists.
+- Describe abandoned-run recovery as classified and bounded: model-only runs can restart, while unfinished tools, completed tools without a model continuation checkpoint, and legacy tool events without journal evidence are failed for manual investigation.
+- Do not call the journal arbitrary external exactly-once. It prevents duplicate local submission for a stable tool-call identity; external exactly-once requires an idempotency contract provided by the target system.
 - Do not claim encrypted checkpoints, complete cancellation, token-event batching, pgvector hybrid retrieval, full metrics/SLOs, or proven load capacity.

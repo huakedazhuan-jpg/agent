@@ -44,7 +44,7 @@ $env:SPRING_FLYWAY_ENABLED = "true"
 .\mvnw.cmd spring-boot:run
 ```
 
-Migrations V1-V14 create durable state for:
+Migrations V1-V15 create durable state for:
 
 - conversations and messages
 - Agent trace aggregates and events
@@ -55,6 +55,7 @@ Migrations V1-V14 create durable state for:
 - Feishu event inbox
 - Feishu approval-required, final-result, and run-failed notification outbox
 - administrator audit events
+- tool-execution reservations, fenced completion results, and recovery evidence
 
 ## JDBC repository switches
 
@@ -133,7 +134,9 @@ Delivery is at-least-once, not strict exactly-once. If Feishu accepts a message 
 
 Approval decisions are restart-recoverable. A scheduled Runtime recovery worker also atomically claims expired `RUNNING` rows with `FOR UPDATE SKIP LOCKED`, advances the lease epoch, and classifies durable event history before dispatch.
 
-Runs are automatically restarted from their original request only when no `TOOL_STARTED` event exists and the configured recovery-attempt limit has not been reached. A run with possible tool side effects, or an exhausted recovery budget, is failed with a durable `RUN_RECOVERY_BLOCKED` audit event instead of being replayed. This is deliberately conservative: normal model checkpoints are not complete continuation snapshots, and arbitrary external tool side effects are not yet journaled or exactly-once.
+Runs are automatically restarted from their original request only when neither Runtime events nor the tool journal show tool activity and the configured recovery-attempt limit has not been reached. Recovery distinguishes an unfinished journal entry, a completed tool without a resumable model checkpoint, and a legacy `TOOL_STARTED` event without journal evidence. Each unsafe case is failed with a durable `RUN_RECOVERY_BLOCKED` event instead of replaying the request.
+
+`tool_execution_journal` reserves `(run_id, tool_call_id)` before invocation and binds it to the tool name, version, and normalized argument hash. A random execution token fences result completion. Terminal results are replayable after process restart; a surviving `STARTED` row is never automatically re-executed. This provides local duplicate-submission prevention, not strict external exactly-once semantics. See [tool-execution-journal.md](tool-execution-journal.md).
 
 ## Current safety boundary
 
