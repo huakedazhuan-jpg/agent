@@ -163,6 +163,33 @@ public class AgentRuntimeService {
         return persisted;
     }
 
+    public AgentRunCancellation cancelOwned(String runId, ActorIdentity owner) {
+        for (int attempt = 0; attempt < 3; attempt++) {
+            AgentRun current = repository.findByIdAndOwner(runId, owner.key());
+            if (current == null) {
+                return new AgentRunCancellation(
+                        AgentRunCancellation.Outcome.NOT_FOUND, null);
+            }
+            if (current.status() == AgentRunStatus.CANCELLED) {
+                return new AgentRunCancellation(
+                        AgentRunCancellation.Outcome.ALREADY_CANCELLED, current);
+            }
+            if (current.status().terminal()) {
+                return new AgentRunCancellation(
+                        AgentRunCancellation.Outcome.TERMINAL_CONFLICT, current);
+            }
+            AgentRun persisted = repository.update(
+                    current.cancel(clock.instant()), current.version(), null);
+            if (persisted != null) {
+                return new AgentRunCancellation(
+                        AgentRunCancellation.Outcome.CANCELLED, persisted);
+            }
+        }
+        AgentRun latest = repository.findByIdAndOwner(runId, owner.key());
+        return new AgentRunCancellation(
+                AgentRunCancellation.Outcome.CONCURRENT_CONFLICT, latest);
+    }
+
     public AgentRun find(String runId) {
         return repository.findById(runId);
     }

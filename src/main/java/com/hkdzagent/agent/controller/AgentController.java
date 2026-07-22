@@ -22,6 +22,8 @@ import com.hkdzagent.agent.runtime.AgentRunCoordinator;
 import com.hkdzagent.agent.runtime.AgentRunStatus;
 import com.hkdzagent.agent.runtime.AgentApprovalOrchestrator;
 import com.hkdzagent.agent.runtime.AgentApprovalPauseService;
+import com.hkdzagent.agent.runtime.AgentCancellationService;
+import com.hkdzagent.agent.runtime.AgentRunCancellation;
 import com.hkdzagent.agent.runtime.InMemoryAgentRunRepository;
 import com.hkdzagent.agent.trace.AgentTrace;
 import com.hkdzagent.agent.trace.AgentTraceEvent;
@@ -63,6 +65,7 @@ public class AgentController {
     private AgentRuntimeExecutor runtimeExecutor;
     private AgentRunCoordinator runCoordinator;
     private AgentApprovalOrchestrator approvalOrchestrator;
+    private AgentCancellationService cancellationService;
 
     public AgentController(LLMClient llmClient) {
         this.llmClient = llmClient;
@@ -167,6 +170,27 @@ public class AgentController {
                 .toList();
     }
 
+    @PostMapping("/api/agent/runs/{runId}/cancel")
+    public ResponseEntity<?> cancelRun(
+            @PathVariable String runId,
+            @RequestBody(required = false) Map<String, String> body,
+            Authentication authentication
+    ) {
+        if (cancellationService == null) {
+            throw new IllegalStateException("agent cancellation service is not configured");
+        }
+        ActorIdentity owner = actorResolver.resolve(authentication);
+        String reason = body == null ? null : body.get("reason");
+        AgentRunCancellation result = cancellationService.cancel(owner, runId, reason);
+        return switch (result.outcome()) {
+            case CANCELLED, ALREADY_CANCELLED -> ResponseEntity.ok(
+                    AgentRunCancellationResponse.from(result));
+            case NOT_FOUND -> ResponseEntity.notFound().build();
+            case TERMINAL_CONFLICT, CONCURRENT_CONFLICT -> ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(AgentRunCancellationResponse.from(result));
+        };
+    }
+
     @GetMapping("/api/agent/traces/{traceId}")
     public ResponseEntity<AgentTraceView> trace(@PathVariable String traceId, Authentication authentication) {
         ActorIdentity owner = actorResolver.resolve(authentication);
@@ -261,6 +285,11 @@ public class AgentController {
         this.approvalOrchestrator = approvalOrchestrator;
     }
 
+    @Autowired(required = false)
+    void setCancellationService(AgentCancellationService cancellationService) {
+        this.cancellationService = cancellationService;
+    }
+
     private String sse(AgentRunEvent event) {
         LinkedHashMap<String, Object> envelope = new LinkedHashMap<>();
         envelope.put("runId", event.runId());
@@ -287,6 +316,7 @@ public class AgentController {
             case TOKEN_DELTA -> "token";
             case RUN_COMPLETED -> "final";
             case RUN_FAILED -> "error";
+            case RUN_CANCELLED -> "cancelled";
             default -> type.name().toLowerCase().replace('_', '-');
         };
     }
@@ -369,6 +399,20 @@ public class AgentController {
             return new AgentRunSubmissionResponse(
                     run.runId(), run.traceId(), run.status().name(),
                     run.pendingApprovalId(), run.errorMessage());
+        }
+    }
+
+    private record AgentRunCancellationResponse(
+            String runId,
+            String status,
+            boolean newlyCancelled
+    ) {
+        private static AgentRunCancellationResponse from(AgentRunCancellation cancellation) {
+            AgentRun run = cancellation.run();
+            return new AgentRunCancellationResponse(
+                    run == null ? null : run.runId(),
+                    run == null ? null : run.status().name(),
+                    cancellation.newlyCancelled());
         }
     }
 }

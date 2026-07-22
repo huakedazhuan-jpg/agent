@@ -289,6 +289,26 @@ public record AgentRun(
         );
     }
 
+    public AgentRun cancel(Instant now) {
+        if (!status.canTransitionTo(AgentRunStatus.CANCELLED)) {
+            throw new IllegalStateException("run cannot be cancelled from status " + status);
+        }
+        return copy(
+                AgentRunStatus.CANCELLED,
+                currentStep,
+                version + 1,
+                lastEventSequence,
+                checkpointJson,
+                null,
+                null,
+                null,
+                null,
+                null,
+                now,
+                now
+        );
+    }
+
     public AgentRun withEventSequence(long sequence, Instant now) {
         if (sequence != lastEventSequence + 1) {
             throw new IllegalArgumentException("runtime event sequence must be contiguous");

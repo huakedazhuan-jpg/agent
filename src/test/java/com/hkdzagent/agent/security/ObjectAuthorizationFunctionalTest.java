@@ -11,6 +11,7 @@ import com.hkdzagent.agent.trace.AgentTraceSanitizer;
 import com.hkdzagent.agent.trace.InMemoryAgentTraceRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hkdzagent.agent.runtime.AgentRun;
+import com.hkdzagent.agent.runtime.AgentCancellationService;
 import com.hkdzagent.agent.runtime.AgentRunCoordinator;
 import com.hkdzagent.agent.runtime.AgentRunStatus;
 import com.hkdzagent.agent.runtime.AgentRuntimeProperties;
@@ -204,6 +205,38 @@ class ObjectAuthorizationFunctionalTest {
                 .andExpect(status().isNotFound());
     }
 
+    @Test
+    void onlyOwnerCanCancelAgentRun() throws Exception {
+        AgentRun run = runtimeService.create(
+                ActorIdentity.user(USER_A), "shared-session", "owned-conversation",
+                "trace-cancel-owned-by-a", "private runtime request");
+
+        mockMvc.perform(post("/api/agent/runs/{runId}/cancel", run.runId())
+                        .with(userJwt(USER_B))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"reason":"must not reveal ownership"}
+                                """))
+                .andExpect(status().isNotFound());
+
+        mockMvc.perform(post("/api/agent/runs/{runId}/cancel", run.runId())
+                        .with(userJwt(USER_A))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"reason":"no longer needed"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.runId").value(run.runId()))
+                .andExpect(jsonPath("$.status").value("CANCELLED"))
+                .andExpect(jsonPath("$.newlyCancelled").value(true));
+
+        mockMvc.perform(post("/api/agent/runs/{runId}/cancel", run.runId())
+                        .with(userJwt(USER_A)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CANCELLED"))
+                .andExpect(jsonPath("$.newlyCancelled").value(false));
+    }
+
     private org.springframework.test.web.servlet.request.RequestPostProcessor userJwt(String subject) {
         return jwt()
                 .jwt(token -> token.subject(subject).claim("roles", List.of("USER")))
@@ -256,6 +289,15 @@ class ObjectAuthorizationFunctionalTest {
             return new AgentRuntimeService(
                     new InMemoryAgentRunRepository(), new AgentRuntimeProperties(),
                     objectMapper, Clock.systemUTC());
+        }
+
+        @Bean
+        AgentCancellationService agentCancellationService(
+                AgentRuntimeService runtimeService,
+                AgentTraceRecorder traceRecorder,
+                AgentTraceSanitizer sanitizer
+        ) {
+            return new AgentCancellationService(runtimeService, traceRecorder, sanitizer);
         }
     }
 }

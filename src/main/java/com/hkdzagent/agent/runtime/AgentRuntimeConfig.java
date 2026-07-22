@@ -53,6 +53,15 @@ public class AgentRuntimeConfig {
     }
 
     @Bean
+    public AgentCancellationService agentCancellationService(
+            AgentRuntimeService runtimeService,
+            AgentTraceRecorder traceRecorder,
+            AgentTraceSanitizer sanitizer
+    ) {
+        return new AgentCancellationService(runtimeService, traceRecorder, sanitizer);
+    }
+
+    @Bean
     public AgentRuntimeExecutor agentRuntimeExecutor(
             AgentRuntimeService runtimeService,
             LLMClient llmClient,

@@ -317,6 +317,22 @@ class InfrastructureConfigurationTest {
     }
 
     @Test
+    void fifteenthFlywayMigrationCreatesDurableToolExecutionJournal() throws IOException {
+        Path migration = PROJECT_ROOT.resolve(
+                "src/main/resources/db/migration/postgresql/V15__durable_tool_execution_journal.sql"
+        );
+        String sql = Files.readString(migration);
+
+        assertThat(sql).contains(
+                "CREATE TABLE tool_execution_journal",
+                "PRIMARY KEY (run_id, tool_call_id)",
+                "execution_token UUID NOT NULL",
+                "status IN ('STARTED', 'COMPLETED')",
+                "ux_tool_execution_journal_token"
+        );
+    }
+
+    @Test
     void environmentTemplateDocumentsInfrastructureSettings() throws IOException {
         String envExample = Files.readString(PROJECT_ROOT.resolve(".env.example"));
 
@@ -352,12 +368,13 @@ class InfrastructureConfigurationTest {
                 "# Infrastructure",
                 "docker compose up -d postgres redis",
                 "PostgreSQL 17 for durable application state",
-                "Migrations V1-V14",
+                "Migrations V1-V15",
                 "Feishu notification outbox",
                 "feishu_event_inbox.run_id",
                 "claim token",
                 "FOR UPDATE SKIP LOCKED",
-                "no `TOOL_STARTED` event exists",
+                "neither Runtime events nor the tool journal show tool activity",
+                "tool_execution_journal",
                 "RUN_RECOVERY_BLOCKED",
                 "Redis is present in the infrastructure baseline but is not used",
                 "Production must provide explicit database and Redis credentials"

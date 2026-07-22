@@ -141,4 +141,25 @@ class AgentRunModelTest {
         assertThat(rejected.status()).isEqualTo(AgentRunStatus.FAILED);
         assertThat(rejected.errorMessage()).isEqualTo("not allowed");
     }
+
+    @Test
+    void cancelsNonTerminalRunsAndReleasesExecutionState() {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        AgentRun created = AgentRun.created(
+                "550e8400-e29b-41d4-a716-446655440010", ActorIdentity.user("user-1"),
+                "session-1", "conversation-1", "trace-1", "question", 5, now);
+        AgentRun running = created.claim("worker-a", now, now.plusSeconds(30));
+        AgentRun waiting = running.waitForApproval(
+                "550e8400-e29b-41d4-a716-446655440099", "{\"toolCall\":{}}",
+                "worker-a", running.leaseEpoch(), now.plusSeconds(1));
+
+        AgentRun cancelledCreated = created.cancel(now.plusSeconds(2));
+        AgentRun cancelledRunning = running.cancel(now.plusSeconds(2));
+        AgentRun cancelledWaiting = waiting.cancel(now.plusSeconds(2));
+
+        assertThat(cancelledCreated.status()).isEqualTo(AgentRunStatus.CANCELLED);
+        assertThat(cancelledRunning.leaseOwner()).isNull();
+        assertThat(cancelledWaiting.pendingApprovalId()).isNull();
+        assertThat(cancelledWaiting.completedAt()).isEqualTo(now.plusSeconds(2));
+    }
 }
