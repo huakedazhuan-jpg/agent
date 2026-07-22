@@ -462,3 +462,5 @@ Recommended current description:
 > A production-designed Spring Boot AI Agent system with a PostgreSQL-backed execution state machine, real SSE token streaming, restart-recoverable human approval, owner-scoped cooperative cancellation, a fenced tool-execution journal, Worker lease recovery, JWT/RBAC, durable Feishu processing, and automated PostgreSQL concurrency/restart tests.
 
 Do not yet claim production deployment, arbitrary external exactly-once effects, automatic continuation after completed tools, pgvector retrieval, complete observability, or proven high-concurrency capacity.
+
+See `docs/resume.md` for concise Chinese/English resume entries, interview evidence, and claim boundaries.
