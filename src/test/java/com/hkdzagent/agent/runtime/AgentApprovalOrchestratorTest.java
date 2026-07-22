@@ -22,6 +22,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -61,6 +62,26 @@ class AgentApprovalOrchestratorTest {
         AgentRun rejected = fixture.runtime.find(run.runId());
         assertThat(rejected.status()).isEqualTo(AgentRunStatus.FAILED);
         assertThat(rejected.errorMessage()).isEqualTo("command not allowed");
+        verify(fixture.llm, times(0)).resumeWithApprovedTool(
+                anyString(), any(AgentObservation.class), any(AgentExecutionObserver.class));
+    }
+
+    @Test
+    void cancelledWaitingRunCannotBeApprovedOrResumed() {
+        Fixture fixture = fixture();
+        AgentRun run = fixture.createAndPause();
+        ToolConfirmation pending = fixture.pending(run);
+
+        AgentRunCancellation cancellation = fixture.cancellationService.cancel(
+                ActorIdentity.user("user-a"), run.runId(), "stop before approval");
+
+        assertThat(cancellation.outcome()).isEqualTo(AgentRunCancellation.Outcome.CANCELLED);
+        assertThat(fixture.confirmationService.findById(pending.id()).status())
+                .isEqualTo(ToolConfirmation.Status.CANCELLED);
+        assertThatThrownBy(() -> fixture.orchestrator.approve(pending.id()))
+                .isInstanceOf(AgentApprovalConflictException.class)
+                .hasMessageContaining("CANCELLED");
+        assertThat(fixture.runtime.find(run.runId()).status()).isEqualTo(AgentRunStatus.CANCELLED);
         verify(fixture.llm, times(0)).resumeWithApprovedTool(
                 anyString(), any(AgentObservation.class), any(AgentExecutionObserver.class));
     }
@@ -153,16 +174,22 @@ class AgentApprovalOrchestratorTest {
                 approvalProperties, null, approvedToolExecutionService);
         AgentApprovalOrchestrator orchestrator = new AgentApprovalOrchestrator(
                 confirmationService, confirmations, runtime, runtimeExecutor, recorder, Runnable::run);
-        return new Fixture(runtime, confirmations, recorder, llm, runtimeExecutor, orchestrator);
+        AgentCancellationService cancellationService = new AgentCancellationService(
+                runtime, recorder, sanitizer, confirmationService);
+        return new Fixture(
+                runtime, confirmations, confirmationService, recorder, llm,
+                runtimeExecutor, orchestrator, cancellationService);
     }
 
     private record Fixture(
             AgentRuntimeService runtime,
             InMemoryToolConfirmationRepository confirmations,
+            ToolConfirmationService confirmationService,
             AgentTraceRecorder recorder,
             LLMClient llm,
             AgentRuntimeExecutor executor,
-            AgentApprovalOrchestrator orchestrator
+            AgentApprovalOrchestrator orchestrator,
+            AgentCancellationService cancellationService
     ) {
         AgentRun createAndPause() {
             AgentRun run = runtime.create(

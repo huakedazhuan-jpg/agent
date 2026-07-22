@@ -241,6 +241,36 @@ class JdbcAgentRunRepositoryTest {
         assertThat(executions).hasValue(1);
     }
 
+    @Test
+    void executesApprovalDecisionOnlyForMatchingWaitingRun() {
+        AgentRun stored = repository.create(run("user-approval"), "{}");
+        AgentRunClaim claim = repository.claim(
+                stored.runId(), "worker-approval", now, Duration.ofSeconds(30));
+        String approvalId = UUID.randomUUID().toString();
+        AgentRun waiting = claim.run().waitForApproval(
+                approvalId, "{\"step\":1}", "worker-approval",
+                claim.run().leaseEpoch(), now.plusSeconds(1));
+        repository.update(waiting, claim.run().version(), "worker-approval");
+        AtomicInteger decisions = new AtomicInteger();
+
+        String mismatched = repository.executeWithWaitingApproval(
+                stored.runId(), UUID.randomUUID().toString(),
+                () -> {
+                    decisions.incrementAndGet();
+                    return "must-not-run";
+                });
+        String allowed = repository.executeWithWaitingApproval(
+                stored.runId(), approvalId,
+                () -> {
+                    decisions.incrementAndGet();
+                    return "approved";
+                });
+
+        assertThat(mismatched).isNull();
+        assertThat(allowed).isEqualTo("approved");
+        assertThat(decisions).hasValue(1);
+    }
+
     private AgentRun run(String userId) {
         return AgentRun.created(
                 UUID.randomUUID().toString(), ActorIdentity.user(userId), "session-1",

@@ -9,6 +9,8 @@ import com.hkdzagent.agent.security.ActorIdentity;
 import com.hkdzagent.agent.trace.AgentTraceRecorder;
 import com.hkdzagent.agent.trace.AgentTraceSanitizer;
 import com.hkdzagent.agent.trace.InMemoryAgentTraceRepository;
+import com.hkdzagent.agent.runtime.AgentApprovalConflictException;
+import com.hkdzagent.agent.runtime.AgentApprovalOrchestrator;
 import com.hkdzagent.agent.runtime.AgentCancellationService;
 import com.hkdzagent.agent.runtime.AgentRun;
 import com.hkdzagent.agent.runtime.AgentRunCancellation;
@@ -61,6 +63,9 @@ class AgentConsoleControllerTest {
 
     @MockitoBean
     private AgentCancellationService cancellationService;
+
+    @MockitoBean
+    private AgentApprovalOrchestrator approvalOrchestrator;
 
     @Test
     void streamEndpointEmitsStructuredConsoleEvents() throws Exception {
@@ -203,6 +208,20 @@ class AgentConsoleControllerTest {
                         "550e8400-e29b-41d4-a716-446655440012"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.status").value("COMPLETED"));
+    }
+
+    @Test
+    void lateApprovalAfterCancellationReturnsConflict() throws Exception {
+        String confirmationId = "550e8400-e29b-41d4-a716-446655440099";
+        when(approvalOrchestrator.approve(confirmationId))
+                .thenThrow(new AgentApprovalConflictException(
+                        "agent run is no longer waiting for approval "
+                                + confirmationId + " (CANCELLED)"));
+
+        mockMvc.perform(post(
+                        "/api/agent/tool-confirmations/{confirmationId}/approve", confirmationId))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value(containsString("CANCELLED")));
     }
 
     @TestConfiguration

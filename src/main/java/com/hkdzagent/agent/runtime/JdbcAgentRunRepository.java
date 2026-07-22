@@ -11,6 +11,7 @@ import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Supplier;
 
@@ -210,6 +211,23 @@ public class JdbcAgentRunRepository implements AgentRunRepository {
         return transactions.execute(status -> {
             AgentRun current = findForUpdate(runId);
             if (current == null || !current.holdsLease(workerId, leaseEpoch, now)) {
+                return null;
+            }
+            return action.get();
+        });
+    }
+
+    @Override
+    public <T> T executeWithWaitingApproval(
+            String runId,
+            String approvalId,
+            Supplier<T> action
+    ) {
+        return transactions.execute(status -> {
+            AgentRun current = findForUpdate(runId);
+            if (current == null
+                    || current.status() != AgentRunStatus.WAITING_APPROVAL
+                    || !Objects.equals(approvalId, current.pendingApprovalId())) {
                 return null;
             }
             return action.get();

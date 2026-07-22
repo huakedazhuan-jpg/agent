@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 public class AgentRuntimeService {
 
@@ -172,6 +173,14 @@ public class AgentRuntimeService {
             throw new IllegalStateException("agent approval was already decided concurrently");
         }
         return persisted;
+    }
+
+    public <T> T decideWaitingApproval(
+            String runId,
+            String approvalId,
+            Supplier<T> decision
+    ) {
+        return repository.executeWithWaitingApproval(runId, approvalId, decision);
     }
 
     public AgentRunCancellation cancelOwned(String runId, ActorIdentity owner) {

@@ -22,6 +22,7 @@ import com.hkdzagent.agent.runtime.AgentRunCoordinator;
 import com.hkdzagent.agent.runtime.AgentRunStatus;
 import com.hkdzagent.agent.runtime.AgentApprovalOrchestrator;
 import com.hkdzagent.agent.runtime.AgentApprovalPauseService;
+import com.hkdzagent.agent.runtime.AgentApprovalConflictException;
 import com.hkdzagent.agent.runtime.AgentCancellationService;
 import com.hkdzagent.agent.runtime.AgentRunCancellation;
 import com.hkdzagent.agent.runtime.InMemoryAgentRunRepository;
@@ -37,6 +38,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -238,6 +240,14 @@ public class AgentController {
         return approvalOrchestrator == null
                 ? confirmationService.reject(confirmationId, reason)
                 : approvalOrchestrator.reject(confirmationId, reason);
+    }
+
+    @ExceptionHandler(AgentApprovalConflictException.class)
+    public ResponseEntity<Map<String, String>> approvalConflict(
+            AgentApprovalConflictException exception
+    ) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(Map.of("error", exception.getMessage()));
     }
 
     @Autowired(required = false)

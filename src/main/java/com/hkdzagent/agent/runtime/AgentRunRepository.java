@@ -45,6 +45,16 @@ public interface AgentRunRepository {
             Supplier<T> action
     );
 
+    /**
+     * Runs a persistence-only approval decision while holding the waiting run row lock.
+     * Callers must acquire resources in run-then-approval order.
+     */
+    <T> T executeWithWaitingApproval(
+            String runId,
+            String approvalId,
+            Supplier<T> action
+    );
+
     AgentRun update(AgentRun run, long expectedVersion, String requiredLeaseOwner);
 
     AgentRunEvent appendEvent(

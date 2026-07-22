@@ -7,6 +7,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.Supplier;
 
 public class InMemoryAgentRunRepository implements AgentRunRepository {
@@ -145,6 +146,21 @@ public class InMemoryAgentRunRepository implements AgentRunRepository {
     ) {
         AgentRun current = runs.get(runId);
         if (current == null || !current.holdsLease(workerId, leaseEpoch, now)) {
+            return null;
+        }
+        return action.get();
+    }
+
+    @Override
+    public synchronized <T> T executeWithWaitingApproval(
+            String runId,
+            String approvalId,
+            Supplier<T> action
+    ) {
+        AgentRun current = runs.get(runId);
+        if (current == null
+                || current.status() != AgentRunStatus.WAITING_APPROVAL
+                || !Objects.equals(approvalId, current.pendingApprovalId())) {
             return null;
         }
         return action.get();
