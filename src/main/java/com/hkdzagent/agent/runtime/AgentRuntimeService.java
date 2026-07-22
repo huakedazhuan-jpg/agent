@@ -179,26 +179,27 @@ public class AgentRuntimeService {
             AgentRun current = repository.findByIdAndOwner(runId, owner.key());
             if (current == null) {
                 return new AgentRunCancellation(
-                        AgentRunCancellation.Outcome.NOT_FOUND, null);
+                        AgentRunCancellation.Outcome.NOT_FOUND, null, null);
             }
             if (current.status() == AgentRunStatus.CANCELLED) {
                 return new AgentRunCancellation(
-                        AgentRunCancellation.Outcome.ALREADY_CANCELLED, current);
+                        AgentRunCancellation.Outcome.ALREADY_CANCELLED, current, null);
             }
             if (current.status().terminal()) {
                 return new AgentRunCancellation(
-                        AgentRunCancellation.Outcome.TERMINAL_CONFLICT, current);
+                        AgentRunCancellation.Outcome.TERMINAL_CONFLICT, current, null);
             }
             AgentRun persisted = repository.update(
                     current.cancel(clock.instant()), current.version(), null);
             if (persisted != null) {
                 return new AgentRunCancellation(
-                        AgentRunCancellation.Outcome.CANCELLED, persisted);
+                        AgentRunCancellation.Outcome.CANCELLED,
+                        persisted, current.pendingApprovalId());
             }
         }
         AgentRun latest = repository.findByIdAndOwner(runId, owner.key());
         return new AgentRunCancellation(
-                AgentRunCancellation.Outcome.CONCURRENT_CONFLICT, latest);
+                AgentRunCancellation.Outcome.CONCURRENT_CONFLICT, latest, null);
     }
 
     public AgentRun find(String runId) {

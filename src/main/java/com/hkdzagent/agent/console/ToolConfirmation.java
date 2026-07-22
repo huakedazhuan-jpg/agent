@@ -63,6 +63,7 @@ public record ToolConfirmation(
         PENDING,
         APPROVED,
         REJECTED,
-        EXPIRED
+        EXPIRED,
+        CANCELLED
     }
 }

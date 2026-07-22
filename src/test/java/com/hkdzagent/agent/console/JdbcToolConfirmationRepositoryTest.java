@@ -100,6 +100,27 @@ class JdbcToolConfirmationRepositoryTest {
     }
 
     @Test
+    void cancelledApprovalIsDurableAndRejectsLateApproval() {
+        ToolConfirmation pending = confirmation(
+                "session-cancelled",
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:15:00Z"));
+        repository.save(pending);
+
+        ToolConfirmation cancelled = repository.decidePending(
+                pending.id(), ToolConfirmation.Status.CANCELLED,
+                "run cancelled", Instant.parse("2026-01-01T00:01:00Z"));
+        ToolConfirmation lateApproval = repository.decidePending(
+                pending.id(), ToolConfirmation.Status.APPROVED,
+                "too late", Instant.parse("2026-01-01T00:01:01Z"));
+
+        assertThat(cancelled.status()).isEqualTo(ToolConfirmation.Status.CANCELLED);
+        assertThat(lateApproval).isNull();
+        assertThat(repository.findById(pending.id()).status())
+                .isEqualTo(ToolConfirmation.Status.CANCELLED);
+    }
+
+    @Test
     void expiresPendingApprovalsAndPreventsLateDecision() {
         ToolConfirmation pending = confirmation(
                 "session-expired",

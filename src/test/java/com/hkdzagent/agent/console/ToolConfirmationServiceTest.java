@@ -114,6 +114,22 @@ class ToolConfirmationServiceTest {
                 .hasMessageContaining("no longer pending");
     }
 
+    @Test
+    void cancelledPendingConfirmationCannotBeApprovedLater() {
+        ToolConfirmationService service = new ToolConfirmationService();
+        ToolConfirmation pending = service.requestConfirmation(
+                "session-cancel", "trace-cancel", "commandExecuteTool", "{}");
+
+        ToolConfirmation cancelled = service.cancelPending(
+                pending.id(), "agent run cancelled by owner");
+
+        assertThat(cancelled.status()).isEqualTo(ToolConfirmation.Status.CANCELLED);
+        assertThat(cancelled.decisionReason()).isEqualTo("agent run cancelled by owner");
+        assertThatThrownBy(() -> service.approve(pending.id()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("CANCELLED");
+    }
+
     private ValidatedToolInvocation<Input, ToolResult> invocation(ActorIdentity owner, String hash) {
         AgentTool<Input, ToolResult> tool = new AgentTool<>() {
             private final ToolMetadata metadata = new ToolMetadata(

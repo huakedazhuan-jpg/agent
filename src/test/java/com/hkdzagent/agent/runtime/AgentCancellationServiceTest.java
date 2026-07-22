@@ -1,6 +1,9 @@
 package com.hkdzagent.agent.runtime;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hkdzagent.agent.console.InMemoryToolConfirmationRepository;
+import com.hkdzagent.agent.console.ToolConfirmation;
+import com.hkdzagent.agent.console.ToolConfirmationService;
 import com.hkdzagent.agent.security.ActorIdentity;
 import com.hkdzagent.agent.trace.AgentTraceRecorder;
 import com.hkdzagent.agent.trace.AgentTraceSanitizer;
@@ -75,6 +78,27 @@ class AgentCancellationServiceTest {
         assertThat(result.run().status()).isEqualTo(AgentRunStatus.COMPLETED);
     }
 
+    @Test
+    void cancellingWaitingRunClosesPendingApprovalInSameServiceOperation() {
+        Fixture fixture = fixture();
+        AgentRunClaim claim = fixture.runtime.claim(fixture.run.runId(), "worker-a");
+        ToolConfirmation approval = fixture.confirmationService.requestConfirmationForRun(
+                fixture.owner, fixture.run.sessionId(), fixture.run.traceId(), fixture.run.runId(),
+                "commandExecuteTool", "{\"command\":\"mvn test\"}");
+        fixture.runtime.waitForApproval(
+                fixture.run.runId(), "worker-a", claim.run().leaseEpoch(),
+                approval.id(), "{\"step\":1}");
+
+        AgentRunCancellation result = fixture.cancellations.cancel(
+                fixture.owner, fixture.run.runId(), "stop waiting");
+
+        assertThat(result.pendingApprovalId()).isEqualTo(approval.id());
+        assertThat(fixture.runtime.find(fixture.run.runId()).status())
+                .isEqualTo(AgentRunStatus.CANCELLED);
+        assertThat(fixture.confirmationService.findById(approval.id()).status())
+                .isEqualTo(ToolConfirmation.Status.CANCELLED);
+    }
+
     private Fixture fixture() {
         AgentRuntimeProperties properties = new AgentRuntimeProperties();
         properties.setLeaseDuration(Duration.ofMinutes(1));
@@ -84,13 +108,18 @@ class AgentCancellationServiceTest {
         InMemoryAgentTraceRepository traces = new InMemoryAgentTraceRepository();
         AgentTraceSanitizer sanitizer = new AgentTraceSanitizer(160);
         AgentTraceRecorder recorder = new AgentTraceRecorder(traces, sanitizer);
+        InMemoryToolConfirmationRepository confirmationRepository =
+                new InMemoryToolConfirmationRepository();
+        ToolConfirmationService confirmationService = new ToolConfirmationService(
+                confirmationRepository, sanitizer, Duration.ofMinutes(15), clock);
         ActorIdentity owner = ActorIdentity.user("cancel-user");
         recorder.startTrace(owner, "trace-cancel", "session-cancel", "cancel me");
         AgentRun run = runtime.create(
                 owner, "session-cancel", "conversation-cancel", "trace-cancel", "cancel me");
         return new Fixture(
-                owner, run, runtime, traces,
-                new AgentCancellationService(runtime, recorder, sanitizer));
+                owner, run, runtime, traces, confirmationService,
+                new AgentCancellationService(
+                        runtime, recorder, sanitizer, confirmationService));
     }
 
     private record Fixture(
@@ -98,6 +127,7 @@ class AgentCancellationServiceTest {
             AgentRun run,
             AgentRuntimeService runtime,
             InMemoryAgentTraceRepository traces,
+            ToolConfirmationService confirmationService,
             AgentCancellationService cancellations
     ) {
     }

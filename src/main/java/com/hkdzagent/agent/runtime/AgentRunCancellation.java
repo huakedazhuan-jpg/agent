@@ -2,8 +2,13 @@ package com.hkdzagent.agent.runtime;
 
 public record AgentRunCancellation(
         Outcome outcome,
-        AgentRun run
+        AgentRun run,
+        String pendingApprovalId
 ) {
+    public AgentRunCancellation(Outcome outcome, AgentRun run) {
+        this(outcome, run, null);
+    }
+
     public enum Outcome {
         CANCELLED,
         ALREADY_CANCELLED,

@@ -202,6 +202,17 @@ public class ToolConfirmationService {
         return decide(confirmationId, ToolConfirmation.Status.REJECTED, normalizedReason);
     }
 
+    public ToolConfirmation cancelPending(String confirmationId, String reason) {
+        String normalizedReason = reason == null || reason.isBlank()
+                ? "agent run cancelled"
+                : reason;
+        Instant now = clock.instant();
+        repository.expirePendingBefore(now);
+        ToolConfirmation cancelled = repository.decidePending(
+                confirmationId, ToolConfirmation.Status.CANCELLED, normalizedReason, now);
+        return cancelled == null ? repository.findById(confirmationId) : cancelled;
+    }
+
     private ToolConfirmation requireBoundApproval(
             ActorIdentity owner,
             String confirmationId,

@@ -163,8 +163,11 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
             String decisionReason,
             Instant decidedAt
     ) {
-        if (status == ToolConfirmation.Status.PENDING || status == ToolConfirmation.Status.EXPIRED) {
-            throw new IllegalArgumentException("decision status must be APPROVED or REJECTED");
+        if (status != ToolConfirmation.Status.APPROVED
+                && status != ToolConfirmation.Status.REJECTED
+                && status != ToolConfirmation.Status.CANCELLED) {
+            throw new IllegalArgumentException(
+                    "decision status must be APPROVED, REJECTED, or CANCELLED");
         }
         int updated = jdbcTemplate.update("""
                 UPDATE tool_approvals

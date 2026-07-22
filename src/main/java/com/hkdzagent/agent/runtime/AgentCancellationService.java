@@ -1,5 +1,6 @@
 package com.hkdzagent.agent.runtime;
 
+import com.hkdzagent.agent.console.ToolConfirmationService;
 import com.hkdzagent.agent.security.ActorIdentity;
 import com.hkdzagent.agent.trace.AgentTraceRecorder;
 import com.hkdzagent.agent.trace.AgentTraceSanitizer;
@@ -12,15 +13,26 @@ public class AgentCancellationService {
     private final AgentRuntimeService runtimeService;
     private final AgentTraceRecorder traceRecorder;
     private final AgentTraceSanitizer sanitizer;
+    private final ToolConfirmationService confirmationService;
 
     public AgentCancellationService(
             AgentRuntimeService runtimeService,
             AgentTraceRecorder traceRecorder,
             AgentTraceSanitizer sanitizer
     ) {
+        this(runtimeService, traceRecorder, sanitizer, null);
+    }
+
+    public AgentCancellationService(
+            AgentRuntimeService runtimeService,
+            AgentTraceRecorder traceRecorder,
+            AgentTraceSanitizer sanitizer,
+            ToolConfirmationService confirmationService
+    ) {
         this.runtimeService = runtimeService;
         this.traceRecorder = traceRecorder;
         this.sanitizer = sanitizer;
+        this.confirmationService = confirmationService;
     }
 
     @Transactional
@@ -32,6 +44,10 @@ public class AgentCancellationService {
         AgentRunCancellation result = runtimeService.cancelOwned(runId, owner);
         if (!result.newlyCancelled()) {
             return result;
+        }
+        if (confirmationService != null && result.pendingApprovalId() != null) {
+            confirmationService.cancelPending(
+                    result.pendingApprovalId(), "agent run cancelled by owner");
         }
         String safeReason = normalizeReason(reason);
         runtimeService.appendSystemEvent(

@@ -57,9 +57,11 @@ public class AgentRuntimeConfig {
     public AgentCancellationService agentCancellationService(
             AgentRuntimeService runtimeService,
             AgentTraceRecorder traceRecorder,
-            AgentTraceSanitizer sanitizer
+            AgentTraceSanitizer sanitizer,
+            ToolConfirmationService confirmationService
     ) {
-        return new AgentCancellationService(runtimeService, traceRecorder, sanitizer);
+        return new AgentCancellationService(
+                runtimeService, traceRecorder, sanitizer, confirmationService);
     }
 
     @Bean
