@@ -136,7 +136,17 @@ public class AgentRuntimeExecutor {
         if (claim == null) {
             throw new IllegalStateException("agent run is not available for worker " + workerId);
         }
-        AgentRun run = claim.run();
+        executeClaimed(claim.run(), workerId, eventConsumer);
+    }
+
+    public void executeClaimed(
+            AgentRun run,
+            String workerId,
+            Consumer<AgentRunEvent> eventConsumer
+    ) {
+        if (run == null) {
+            throw new IllegalArgumentException("claimed agent run must not be null");
+        }
         try (AgentRunLeaseHeartbeat heartbeat = heartbeat(run, workerId)) {
             emitWorker(run, workerId, AgentRunEventType.RUN_STARTED,
                     Map.of("workerId", workerId), eventConsumer);

@@ -12,6 +12,7 @@ Built a production-designed Spring Boot AI Agent system with durable PostgreSQL 
 - Added JWT authentication, `USER`/`ADMIN` RBAC, owner-scoped Runtime/trace/memory/approval access, PostgreSQL-backed users, BCrypt password storage, and production fail-fast configuration validation.
 - Hardened Feishu processing with a PostgreSQL inbox and notification outbox, event/business-key deduplication, processing leases, retries, stale-work recovery, dead letters, ADMIN retry, audit records, and low-cardinality metrics.
 - Maintained an automated Java test suite covering state transitions, JDBC repositories, transaction rollback, concurrency controls, streaming protocol parsing, approval recovery, API authorization, configuration safety, PostgreSQL 17 migrations, and database-process restart recovery.
+- Implemented lease-epoch fencing, heartbeat renewal, `SKIP LOCKED` stale-run claiming, bounded model-stage recovery, and conservative blocking when tool side effects are indeterminate.
 
 ## Interview walkthrough
 
@@ -27,5 +28,5 @@ Explain the Runtime in this order:
 ## Claims to avoid
 
 - Do not call the system production-deployed; the repository demonstrates production-oriented design and tests.
-- Claim PostgreSQL restart recovery only for the tested persistence and approval workflow; arbitrary abandoned `RUNNING` runs are not automatically resumed.
+- Describe abandoned-run recovery as classified and bounded: model-only runs can restart, while runs that reached tool execution are failed for manual investigation until a tool execution journal exists.
 - Do not claim encrypted checkpoints, complete cancellation, token-event batching, pgvector hybrid retrieval, full metrics/SLOs, or proven load capacity.

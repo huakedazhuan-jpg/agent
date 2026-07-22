@@ -12,6 +12,8 @@ public class AgentRuntimeProperties {
     private Duration leaseDuration = Duration.ofSeconds(30);
     private Duration heartbeatInterval = Duration.ofSeconds(10);
     private int eventReplayLimit = 500;
+    private int recoveryBatchSize = 10;
+    private int maxRecoveryAttempts = 3;
 
     public String getRepository() {
         return repository;
@@ -51,5 +53,21 @@ public class AgentRuntimeProperties {
 
     public void setEventReplayLimit(int eventReplayLimit) {
         this.eventReplayLimit = eventReplayLimit;
+    }
+
+    public int getRecoveryBatchSize() {
+        return recoveryBatchSize;
+    }
+
+    public void setRecoveryBatchSize(int recoveryBatchSize) {
+        this.recoveryBatchSize = recoveryBatchSize;
+    }
+
+    public int getMaxRecoveryAttempts() {
+        return maxRecoveryAttempts;
+    }
+
+    public void setMaxRecoveryAttempts(int maxRecoveryAttempts) {
+        this.maxRecoveryAttempts = maxRecoveryAttempts;
     }
 }

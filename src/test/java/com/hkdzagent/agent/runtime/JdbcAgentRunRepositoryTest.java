@@ -188,6 +188,26 @@ class JdbcAgentRunRepositoryTest {
         }
     }
 
+    @Test
+    void aggregatesDurableRecoveryEvidenceFromRunEvents() {
+        AgentRun stored = repository.create(run("user-evidence"), "{}");
+        AgentRunClaim claim = repository.claim(
+                stored.runId(), "worker-evidence", now, Duration.ofSeconds(30));
+        repository.appendWorkerEvent(
+                stored.runId(), "worker-evidence", claim.run().leaseEpoch(),
+                AgentRunEventType.TOOL_STARTED, "{}", now.plusSeconds(1));
+        repository.appendWorkerEvent(
+                stored.runId(), "worker-evidence", claim.run().leaseEpoch(),
+                AgentRunEventType.RUN_RECOVERY_STARTED, "{}", now.plusSeconds(2));
+        repository.appendWorkerEvent(
+                stored.runId(), "worker-evidence", claim.run().leaseEpoch(),
+                AgentRunEventType.RUN_RECOVERY_STARTED, "{}", now.plusSeconds(3));
+
+        assertThat(repository.findRecoveryEvidence(stored.runId()))
+                .isEqualTo(new AgentRunRecoveryEvidence(true, 2));
+        assertThat(repository.findRecoveryEvidence(UUID.randomUUID().toString())).isNull();
+    }
+
     private AgentRun run(String userId) {
         return AgentRun.created(
                 UUID.randomUUID().toString(), ActorIdentity.user(userId), "session-1",

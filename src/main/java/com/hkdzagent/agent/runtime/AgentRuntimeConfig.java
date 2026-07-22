@@ -147,6 +147,32 @@ public class AgentRuntimeConfig {
     }
 
     @Bean
+    public AgentRunRecoveryClassifier agentRunRecoveryClassifier() {
+        return new AgentRunRecoveryClassifier();
+    }
+
+    @Bean
+    public AgentRunRecoveryService agentRunRecoveryService(
+            AgentRuntimeService runtimeService,
+            AgentRuntimeExecutor runtimeExecutor,
+            AgentFailureService failureService,
+            AgentRunRecoveryClassifier classifier,
+            AgentRuntimeProperties properties,
+            @Qualifier("agentRuntimeTaskExecutor") Executor executor
+    ) {
+        return new AgentRunRecoveryService(
+                runtimeService, runtimeExecutor, failureService,
+                classifier, properties, executor);
+    }
+
+    @Bean
+    public AgentRunRecoveryScheduler agentRunRecoveryScheduler(
+            AgentRunRecoveryService recoveryService
+    ) {
+        return new AgentRunRecoveryScheduler(recoveryService);
+    }
+
+    @Bean
     public AgentRunCoordinator agentRunCoordinator(
             AgentRuntimeService runtimeService,
             AgentRuntimeExecutor runtimeExecutor,

@@ -22,6 +22,8 @@ public interface AgentRunRepository {
             Duration leaseDuration
     );
 
+    AgentRunRecoveryEvidence findRecoveryEvidence(String runId);
+
     AgentRun renewLease(
             String runId,
             String workerId,

@@ -151,6 +151,26 @@ public class JdbcAgentRunRepository implements AgentRunRepository {
     }
 
     @Override
+    public AgentRunRecoveryEvidence findRecoveryEvidence(String runId) {
+        if (findById(runId) == null) {
+            return null;
+        }
+        return jdbcTemplate.queryForObject("""
+                SELECT
+                    COALESCE(SUM(CASE WHEN event_type = 'TOOL_STARTED' THEN 1 ELSE 0 END), 0)
+                        AS tool_started_count,
+                    COALESCE(SUM(CASE WHEN event_type = 'RUN_RECOVERY_STARTED' THEN 1 ELSE 0 END), 0)
+                        AS recovery_attempts
+                FROM agent_run_events
+                WHERE run_id = :runId
+                """,
+                new MapSqlParameterSource("runId", uuid(runId)),
+                (rs, rowNum) -> new AgentRunRecoveryEvidence(
+                        rs.getLong("tool_started_count") > 0,
+                        Math.toIntExact(rs.getLong("recovery_attempts"))));
+    }
+
+    @Override
     public AgentRun renewLease(
             String runId,
             String workerId,

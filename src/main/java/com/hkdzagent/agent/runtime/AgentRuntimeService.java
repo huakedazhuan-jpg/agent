@@ -64,6 +64,14 @@ public class AgentRuntimeService {
                 workerId, clock.instant(), properties.getLeaseDuration());
     }
 
+    public AgentRunRecoveryEvidence recoveryEvidence(String runId) {
+        AgentRunRecoveryEvidence evidence = repository.findRecoveryEvidence(runId);
+        if (evidence == null) {
+            throw new IllegalArgumentException("agent run not found: " + runId);
+        }
+        return evidence;
+    }
+
     public AgentRun renewLease(String runId, String workerId, long leaseEpoch) {
         AgentRun renewed = repository.renewLease(
                 runId, workerId, leaseEpoch, clock.instant(), properties.getLeaseDuration());
@@ -232,6 +240,12 @@ public class AgentRuntimeService {
         }
         if (candidate.getEventReplayLimit() < 1) {
             throw new IllegalArgumentException("agent.runtime.event-replay-limit must be positive");
+        }
+        if (candidate.getRecoveryBatchSize() < 1) {
+            throw new IllegalArgumentException("agent.runtime.recovery-batch-size must be positive");
+        }
+        if (candidate.getMaxRecoveryAttempts() < 1) {
+            throw new IllegalArgumentException("agent.runtime.max-recovery-attempts must be positive");
         }
     }
 }

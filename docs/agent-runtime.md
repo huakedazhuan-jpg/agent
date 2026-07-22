@@ -51,6 +51,8 @@ V8, the Runtime domain model, memory/JDBC repositories, worker leasing, optimist
 
 Sensitive tools are gated before execution. Runtime persists the provider checkpoint, enters `WAITING_APPROVAL`, and releases its worker lease. An approved decision conditionally resumes the matching run and executes the saved tool call once; rejection or expiry fails the run without tool execution. A recovery scheduler reconciles durable decisions after process restarts. Approval-required, completed, and failed Feishu transitions enqueue notifications transactionally through a durable outbox.
 
+Expired `RUNNING` leases are discovered by a separate recovery scheduler. PostgreSQL workers use `FOR UPDATE SKIP LOCKED` and a monotonically increasing lease epoch so only one replacement Worker can proceed. Event history determines the policy: model-only work can restart within a bounded attempt budget, while any run that reached `TOOL_STARTED` is blocked and failed because its external side effect may be indeterminate.
+
 Both blocking and streaming chat endpoints execute through Runtime. Real PostgreSQL 17 migration, repository reconstruction, and database-process restart gates are implemented.
 
 The remaining Runtime boundary is explicit: there is no scanner that reschedules arbitrary abandoned `RUNNING` runs after their Worker lease expires, and Feishu inbox rows do not yet persist their created run ID. `CANCELLED` is represented in the state model but has no API or execution implementation. Provider checkpoints remain unencrypted, and high-volume token events are not batched.

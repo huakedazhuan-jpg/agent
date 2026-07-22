@@ -75,6 +75,10 @@ Runtime and approval timing are configurable:
 
 ```properties
 AGENT_RUNTIME_LEASE_DURATION=2m
+AGENT_RUNTIME_HEARTBEAT_INTERVAL=30s
+AGENT_RUNTIME_RECOVERY_INTERVAL=15s
+AGENT_RUNTIME_RECOVERY_BATCH_SIZE=10
+AGENT_RUNTIME_MAX_RECOVERY_ATTEMPTS=3
 AGENT_RUNTIME_EVENT_REPLAY_LIMIT=500
 AGENT_TOOL_APPROVAL_TTL=15m
 ```
@@ -127,7 +131,9 @@ Delivery is at-least-once, not strict exactly-once. If Feishu accepts a message 
 
 ## Runtime recovery boundary
 
-Approval decisions are restart-recoverable. Arbitrary abandoned `RUNNING` runs are not automatically rescheduled after lease expiry because no general Runtime recovery scanner exists yet. The lease model permits a safe reclaim, but no component currently discovers and submits those runs.
+Approval decisions are restart-recoverable. A scheduled Runtime recovery worker also atomically claims expired `RUNNING` rows with `FOR UPDATE SKIP LOCKED`, advances the lease epoch, and classifies durable event history before dispatch.
+
+Runs are automatically restarted from their original request only when no `TOOL_STARTED` event exists and the configured recovery-attempt limit has not been reached. A run with possible tool side effects, or an exhausted recovery budget, is failed with a durable `RUN_RECOVERY_BLOCKED` audit event instead of being replayed. This is deliberately conservative: normal model checkpoints are not complete continuation snapshots, and arbitrary external tool side effects are not yet journaled or exactly-once.
 
 ## Current safety boundary
 

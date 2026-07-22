@@ -2,7 +2,7 @@
 
 XingClaw Agent is a Spring Boot AI agent system focused on durable execution, tool calling, human approval, multi-user isolation, and external-channel integration.
 
-The repository contains a production-designed Agent Runtime with PostgreSQL persistence, real provider token streaming, restart-recoverable tool approval, JWT/RBAC, owner-scoped resources, and durable Feishu notifications. Real PostgreSQL 17 migration and database-process restart gates are implemented. It is suitable as a resume project, but should not be described as production-deployed: general recovery of abandoned `RUNNING` runs, checkpoint encryption, load testing, complete observability, and deployment automation remain incomplete.
+The repository contains a production-designed Agent Runtime with PostgreSQL persistence, real provider token streaming, restart-recoverable tool approval, fenced recovery of abandoned runs, JWT/RBAC, owner-scoped resources, and durable Feishu notifications. Real PostgreSQL 17 migration and database-process restart gates are implemented. It is suitable as a resume project, but should not be described as production-deployed: exactly-once recovery of arbitrary tool side effects, checkpoint encryption, load testing, complete observability, and deployment automation remain incomplete.
 
 ## Current Status
 
@@ -33,7 +33,7 @@ Spring AI is pinned to the stable 1.1.x line because this project currently stay
 - Blocking chat API at `/api/agent/chat`
 - Console SSE endpoint at `/api/agent/chat/stream`
   - Reads real provider SSE deltas and persists ordered Runtime events with replayable SSE IDs.
-- Durable Agent Runtime with state machine, optimistic versioning, Worker leases, checkpoints, event replay, and restart recovery for approval decisions
+- Durable Agent Runtime with state machine, optimistic versioning, fenced Worker leases, heartbeats, event replay, approval recovery, and classified recovery of expired `RUNNING` runs
 - Human-in-the-loop approval that pauses sensitive tools before execution and resumes the saved tool call exactly once after approval
 - Agent trace with in-memory local adapter and optional PostgreSQL JDBC repository
 - Tool confirmation queue with in-memory local adapter and optional PostgreSQL JDBC repository, expiry, and atomic decisions
@@ -290,6 +290,7 @@ Current CI gate:
 - `./mvnw -B --no-transfer-progress test`
 - `./mvnw -B --no-transfer-progress -DskipTests package`
 - PostgreSQL 17 migration, repository reconstruction, and real database-process restart recovery tests
+- Concurrent expired-run recovery tests proving that only one PostgreSQL Worker can claim a stale lease
 
 See `docs/quality-gates.md` for the current quality gate and known CI/CD gaps.
 
@@ -419,7 +420,7 @@ The following gaps are intentional tracking items for the production-grade upgra
 - JWT authentication, `USER`/`ADMIN` RBAC, and owner checks exist for chat memory, traces, and approval lists; organization/tenant isolation is not implemented.
 - Access tokens currently have no refresh, revocation, key rotation, or login rate limiting.
 - PostgreSQL/Redis/Flyway infrastructure exists, and Agent Runtime/trace/chat memory/tool approvals/Feishu inbox/notification outbox/admin audit have JDBC repository switches. Redis is configured but is not yet used by application logic.
-- Runtime and notification-outbox persistence are covered by H2 tests and real PostgreSQL 17 migration/recovery gates, including a database-process restart drill.
+- Runtime and notification-outbox persistence are covered by H2 tests and real PostgreSQL 17 migration/recovery gates, including concurrent stale-run claiming and a database-process restart drill.
 - Approval decisions recover after restart, but there is no general scheduler for abandoned `RUNNING` runs. The Feishu inbox also does not yet bind an event ID to its created run ID, so a crash during execution can create a second run when the inbox retries.
 - `CANCELLED` exists in the state model, but cancellation API, execution cooperation, persistence service, and tests are not implemented.
 - Provider checkpoints contain complete resume context and need production encryption plus retention cleanup.

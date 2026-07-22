@@ -69,6 +69,9 @@ agent:
     max-steps: ${AGENT_RUNTIME_MAX_STEPS:5}
     lease-duration: ${AGENT_RUNTIME_LEASE_DURATION:2m}
     heartbeat-interval: ${AGENT_RUNTIME_HEARTBEAT_INTERVAL:30s}
+    recovery-batch-size: ${AGENT_RUNTIME_RECOVERY_BATCH_SIZE:10}
+    max-recovery-attempts: ${AGENT_RUNTIME_MAX_RECOVERY_ATTEMPTS:3}
+    recovery-interval: ${AGENT_RUNTIME_RECOVERY_INTERVAL:15s}
     event-replay-limit: ${AGENT_RUNTIME_EVENT_REPLAY_LIMIT:500}
   security:
     enabled: ${AGENT_SECURITY_ENABLED:false}

@@ -199,8 +199,17 @@ class RealPostgresAgentRuntimeIntegrationTest {
                 assertThat(claim.run().leaseEpoch())
                         .isEqualTo(initial.run().leaseEpoch() + 1);
             });
-            assertThat(runtimeRepository().findById(stored.runId()).leaseOwner())
+            AgentRun recovered = runtimeRepository().findById(stored.runId());
+            assertThat(recovered.leaseOwner())
                     .isIn("recovery-a", "recovery-b");
+            setupRepository.appendWorkerEvent(
+                    stored.runId(), recovered.leaseOwner(), recovered.leaseEpoch(),
+                    AgentRunEventType.TOOL_STARTED, "{}", now.plusSeconds(7));
+            setupRepository.appendWorkerEvent(
+                    stored.runId(), recovered.leaseOwner(), recovered.leaseEpoch(),
+                    AgentRunEventType.RUN_RECOVERY_STARTED, "{}", now.plusSeconds(8));
+            assertThat(setupRepository.findRecoveryEvidence(stored.runId()))
+                    .isEqualTo(new AgentRunRecoveryEvidence(true, 1));
         } finally {
             workers.shutdownNow();
         }

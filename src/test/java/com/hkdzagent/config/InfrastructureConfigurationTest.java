@@ -339,7 +339,9 @@ class InfrastructureConfigurationTest {
                 "PostgreSQL 17 for durable application state",
                 "Migrations V1-V13",
                 "Feishu notification outbox",
-                "Arbitrary abandoned `RUNNING` runs are not automatically rescheduled",
+                "FOR UPDATE SKIP LOCKED",
+                "no `TOOL_STARTED` event exists",
+                "RUN_RECOVERY_BLOCKED",
                 "Redis is present in the infrastructure baseline but is not used",
                 "Production must provide explicit database and Redis credentials"
         );

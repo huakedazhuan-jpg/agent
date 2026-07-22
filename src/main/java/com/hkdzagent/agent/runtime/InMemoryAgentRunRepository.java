@@ -98,6 +98,20 @@ public class InMemoryAgentRunRepository implements AgentRunRepository {
     }
 
     @Override
+    public synchronized AgentRunRecoveryEvidence findRecoveryEvidence(String runId) {
+        if (!runs.containsKey(runId)) {
+            return null;
+        }
+        List<AgentRunEvent> runEvents = events.getOrDefault(runId, List.of());
+        boolean toolStarted = runEvents.stream()
+                .anyMatch(event -> event.type() == AgentRunEventType.TOOL_STARTED);
+        int attempts = Math.toIntExact(runEvents.stream()
+                .filter(event -> event.type() == AgentRunEventType.RUN_RECOVERY_STARTED)
+                .count());
+        return new AgentRunRecoveryEvidence(toolStarted, attempts);
+    }
+
+    @Override
     public synchronized AgentRun renewLease(
             String runId,
             String workerId,
