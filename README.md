@@ -243,7 +243,7 @@ $env:AGENT_SECURITY_BOOTSTRAP_ROLE = "ADMIN"
 
 The bootstrap account is inserted only when the username does not already exist; startup does not overwrite its password. See `docs/security.md` for endpoint policy and current limitations.
 
-See `docs/infrastructure.md` for the infrastructure boundary and `docs/tool-execution-journal.md` for journal states, recovery decisions, and operator guidance.
+See `docs/infrastructure.md` for the infrastructure boundary, `docs/tool-execution-journal.md` for journal states and recovery decisions, and `docs/operations-runbook.md` for startup, diagnosis, incident response, and safe-shutdown procedures.
 
 ## Build, Test, and Run
 
