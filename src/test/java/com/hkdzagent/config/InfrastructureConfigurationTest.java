@@ -288,6 +288,20 @@ class InfrastructureConfigurationTest {
     }
 
     @Test
+    void thirteenthFlywayMigrationAddsAgentRunLeaseFencing() throws IOException {
+        Path migration = PROJECT_ROOT.resolve(
+                "src/main/resources/db/migration/postgresql/V13__agent_run_lease_fencing.sql"
+        );
+        String sql = Files.readString(migration);
+
+        assertThat(sql).contains(
+                "ADD COLUMN lease_epoch BIGINT NOT NULL DEFAULT 0",
+                "ck_agent_runs_lease_epoch",
+                "lease_epoch >= 0"
+        );
+    }
+
+    @Test
     void environmentTemplateDocumentsInfrastructureSettings() throws IOException {
         String envExample = Files.readString(PROJECT_ROOT.resolve(".env.example"));
 
@@ -323,7 +337,7 @@ class InfrastructureConfigurationTest {
                 "# Infrastructure",
                 "docker compose up -d postgres redis",
                 "PostgreSQL 17 for durable application state",
-                "Migrations V1-V12",
+                "Migrations V1-V13",
                 "Feishu notification outbox",
                 "Arbitrary abandoned `RUNNING` runs are not automatically rescheduled",
                 "Redis is present in the infrastructure baseline but is not used",

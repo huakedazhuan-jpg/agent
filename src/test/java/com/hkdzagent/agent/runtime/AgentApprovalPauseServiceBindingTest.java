@@ -65,7 +65,7 @@ class AgentApprovalPauseServiceBindingTest {
                 + "\"arguments\":\"{\\\"command\\\":\\\"mvn test\\\"}\"}}}";
 
         pauseService.pauseBoundInvocation(
-                created, claim.run().leaseOwner(), 1, context,
+                claim.run(), claim.run().leaseOwner(), 1, context,
                 arguments, assessment, checkpoint);
 
         AgentRun waiting = runtime.find(created.runId());
@@ -123,7 +123,7 @@ class AgentApprovalPauseServiceBindingTest {
                 + "\"arguments\":\"{\\\"command\\\":\\\"mvn test\\\"}\"}}}";
 
         assertThatThrownBy(() -> pauseService.pauseBoundInvocation(
-                created,
+                claim.run(),
                 claim.run().leaseOwner(),
                 1,
                 context,

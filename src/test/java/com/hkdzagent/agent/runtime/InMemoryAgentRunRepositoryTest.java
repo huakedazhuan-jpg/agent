@@ -34,9 +34,12 @@ class InMemoryAgentRunRepositoryTest {
         assertThat(repository.findByIdAndOwner(stored.runId(), "user:user-b")).isNull();
         AgentRunClaim first = repository.claim(stored.runId(), "worker-a", now, Duration.ofSeconds(30));
         assertThat(first.started()).isTrue();
+        assertThat(first.run().leaseEpoch()).isOne();
         assertThat(repository.claim(stored.runId(), "worker-b", now.plusSeconds(1), Duration.ofSeconds(30))).isNull();
 
-        AgentRun advanced = first.run().advance(1, "{\"step\":1}", "worker-a", now.plusSeconds(2));
+        AgentRun advanced = first.run().advance(
+                1, "{\"step\":1}", "worker-a",
+                first.run().leaseEpoch(), now.plusSeconds(2));
         assertThat(repository.update(advanced, first.run().version(), "worker-a")).isNotNull();
         assertThat(repository.update(advanced, first.run().version(), "worker-a")).isNull();
 
@@ -44,6 +47,21 @@ class InMemoryAgentRunRepositoryTest {
                 stored.runId(), "worker-b", now.plusSeconds(31), Duration.ofSeconds(30));
         assertThat(reclaimed).isNotNull();
         assertThat(reclaimed.started()).isFalse();
+        assertThat(reclaimed.run().leaseEpoch()).isEqualTo(2);
+        assertThat(repository.appendWorkerEvent(
+                stored.runId(), "worker-a", first.run().leaseEpoch(),
+                AgentRunEventType.TOKEN_DELTA, "{}", now.plusSeconds(32))).isNull();
+        assertThat(repository.appendWorkerEvent(
+                stored.runId(), "worker-b", reclaimed.run().leaseEpoch(),
+                AgentRunEventType.TOKEN_DELTA, "{}", now.plusSeconds(32))).isNotNull();
+        assertThat(repository.renewLease(
+                stored.runId(), "worker-a", first.run().leaseEpoch(),
+                now.plusSeconds(32), Duration.ofSeconds(30))).isNull();
+        AgentRun renewed = repository.renewLease(
+                stored.runId(), "worker-b", reclaimed.run().leaseEpoch(),
+                now.plusSeconds(32), Duration.ofSeconds(30));
+        assertThat(renewed.leaseEpoch()).isEqualTo(reclaimed.run().leaseEpoch());
+        assertThat(renewed.leaseExpiresAt()).isEqualTo(now.plusSeconds(62));
     }
 
     @Test

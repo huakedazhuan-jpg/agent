@@ -68,6 +68,7 @@ agent:
     repository: ${AGENT_RUNTIME_REPOSITORY:memory}
     max-steps: ${AGENT_RUNTIME_MAX_STEPS:5}
     lease-duration: ${AGENT_RUNTIME_LEASE_DURATION:2m}
+    heartbeat-interval: ${AGENT_RUNTIME_HEARTBEAT_INTERVAL:30s}
     event-replay-limit: ${AGENT_RUNTIME_EVENT_REPLAY_LIMIT:500}
   security:
     enabled: ${AGENT_SECURITY_ENABLED:false}

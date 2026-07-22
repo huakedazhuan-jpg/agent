@@ -29,6 +29,7 @@ public class AgentRuntimeExecutor {
     private final ApprovedToolExecutionService approvedToolExecutionService;
     private final AgentCompletionService completionService;
     private final AgentFailureService failureService;
+    private final AgentRunLeaseHeartbeatFactory heartbeatFactory;
 
     public AgentRuntimeExecutor(
             AgentRuntimeService runtimeService,
@@ -39,7 +40,7 @@ public class AgentRuntimeExecutor {
             ToolConfirmationProperties confirmationProperties
     ) {
         this(runtimeService, llmClient, traceRecorder, sanitizer,
-                approvalPauseService, confirmationProperties, null, null, null, null);
+                approvalPauseService, confirmationProperties, null, null, null, null, null);
     }
 
     public AgentRuntimeExecutor(
@@ -53,7 +54,7 @@ public class AgentRuntimeExecutor {
     ) {
         this(runtimeService, llmClient, traceRecorder, sanitizer,
                 approvalPauseService, confirmationProperties,
-                toolExecutionPipeline, null, null, null);
+                toolExecutionPipeline, null, null, null, null);
     }
 
     public AgentRuntimeExecutor(
@@ -68,7 +69,7 @@ public class AgentRuntimeExecutor {
     ) {
         this(runtimeService, llmClient, traceRecorder, sanitizer,
                 approvalPauseService, confirmationProperties,
-                toolExecutionPipeline, approvedToolExecutionService, null, null);
+                toolExecutionPipeline, approvedToolExecutionService, null, null, null);
     }
 
     public AgentRuntimeExecutor(
@@ -84,7 +85,7 @@ public class AgentRuntimeExecutor {
     ) {
         this(runtimeService, llmClient, traceRecorder, sanitizer,
                 approvalPauseService, confirmationProperties, toolExecutionPipeline,
-                approvedToolExecutionService, completionService, null);
+                approvedToolExecutionService, completionService, null, null);
     }
 
     public AgentRuntimeExecutor(
@@ -99,6 +100,24 @@ public class AgentRuntimeExecutor {
             AgentCompletionService completionService,
             AgentFailureService failureService
     ) {
+        this(runtimeService, llmClient, traceRecorder, sanitizer,
+                approvalPauseService, confirmationProperties, toolExecutionPipeline,
+                approvedToolExecutionService, completionService, failureService, null);
+    }
+
+    public AgentRuntimeExecutor(
+            AgentRuntimeService runtimeService,
+            LLMClient llmClient,
+            AgentTraceRecorder traceRecorder,
+            AgentTraceSanitizer sanitizer,
+            AgentApprovalPauseService approvalPauseService,
+            ToolConfirmationProperties confirmationProperties,
+            ToolExecutionPipeline toolExecutionPipeline,
+            ApprovedToolExecutionService approvedToolExecutionService,
+            AgentCompletionService completionService,
+            AgentFailureService failureService,
+            AgentRunLeaseHeartbeatFactory heartbeatFactory
+    ) {
         this.runtimeService = runtimeService;
         this.llmClient = llmClient;
         this.traceRecorder = traceRecorder;
@@ -109,21 +128,25 @@ public class AgentRuntimeExecutor {
         this.approvedToolExecutionService = approvedToolExecutionService;
         this.completionService = completionService;
         this.failureService = failureService;
+        this.heartbeatFactory = heartbeatFactory;
     }
 
     public void execute(String runId, String workerId, Consumer<AgentRunEvent> eventConsumer) {
-        AgentRun run = requireRun(runId);
         AgentRunClaim claim = runtimeService.claim(runId, workerId);
         if (claim == null) {
             throw new IllegalStateException("agent run is not available for worker " + workerId);
         }
-        emit(runId, AgentRunEventType.RUN_STARTED, Map.of("workerId", workerId), eventConsumer);
-
-        RuntimeObserver observer = new RuntimeObserver(run, workerId, eventConsumer);
-        try {
+        AgentRun run = claim.run();
+        try (AgentRunLeaseHeartbeat heartbeat = heartbeat(run, workerId)) {
+            emitWorker(run, workerId, AgentRunEventType.RUN_STARTED,
+                    Map.of("workerId", workerId), eventConsumer);
+            RuntimeObserver observer = new RuntimeObserver(run, workerId, heartbeat, eventConsumer);
             AgentLoopResult result = llmClient.runWithTools(
                     run.userMessage(), run.conversationId(), run.traceId(), observer);
+            assertHeartbeat(heartbeat);
             handleResult(run, workerId, result, eventConsumer);
+        } catch (AgentRunLeaseLostException exception) {
+            throw exception;
         } catch (Exception exception) {
             AgentRunEvent event = failExecution(
                     run, workerId, sanitizer.preview(safeMessage(exception)));
@@ -139,10 +162,11 @@ public class AgentRuntimeExecutor {
             Consumer<AgentRunEvent> eventConsumer
     ) {
         AgentRun run = runtimeService.resumeApproval(runId, approvalId, workerId);
-        emit(runId, AgentRunEventType.RUN_STARTED,
-                Map.of("workerId", workerId, "resumed", true, "approvalId", approvalId), eventConsumer);
-        RuntimeObserver observer = new RuntimeObserver(run, workerId, eventConsumer);
-        try {
+        try (AgentRunLeaseHeartbeat heartbeat = heartbeat(run, workerId)) {
+            emitWorker(run, workerId, AgentRunEventType.RUN_STARTED,
+                    Map.of("workerId", workerId, "resumed", true, "approvalId", approvalId),
+                    eventConsumer);
+            RuntimeObserver observer = new RuntimeObserver(run, workerId, heartbeat, eventConsumer);
             if (approvedToolExecutionService == null) {
                 throw new IllegalStateException("approved tool execution service is not configured");
             }
@@ -150,7 +174,10 @@ public class AgentRuntimeExecutor {
                     approvedToolExecutionService.execute(run, approvalId);
             AgentLoopResult result = llmClient.resumeWithApprovedTool(
                     run.checkpointJson(), approvedExecution.observation(), observer);
+            assertHeartbeat(heartbeat);
             handleResult(run, workerId, result, eventConsumer);
+        } catch (AgentRunLeaseLostException exception) {
+            throw exception;
         } catch (Exception exception) {
             AgentRunEvent event = failExecution(
                     run, workerId, sanitizer.preview(safeMessage(exception)));
@@ -175,26 +202,31 @@ public class AgentRuntimeExecutor {
             recordFailureTrace(run, result.finalAnswer());
             return;
         }
+        AgentRunEvent completedEvent;
         if (completionService == null) {
-            runtimeService.complete(run.runId(), workerId, result.finalAnswer());
+            runtimeService.complete(
+                    run.runId(), workerId, run.leaseEpoch(), result.finalAnswer());
+            completedEvent = runtimeService.appendSystemEvent(
+                    run.runId(), AgentRunEventType.RUN_COMPLETED,
+                    Map.of("answer", result.finalAnswer()));
         } else {
-            completionService.complete(run.runId(), workerId, result.finalAnswer());
+            completedEvent = completionService.complete(
+                    run.runId(), workerId, run.leaseEpoch(), result.finalAnswer()).event();
         }
         traceRecorder.recordFinalAnswer(run.traceId(), result.finalAnswer());
         traceRecorder.finishTrace(run.traceId(), "COMPLETED");
-        emit(run.runId(), AgentRunEventType.RUN_COMPLETED,
-                Map.of("answer", result.finalAnswer()), eventConsumer);
+        accept(completedEvent, eventConsumer);
     }
 
     private AgentRunEvent failExecution(AgentRun run, String workerId, String error) {
         if (failureService != null) {
-            return failureService.fail(run.runId(), workerId, error);
+            return failureService.fail(run.runId(), workerId, run.leaseEpoch(), error);
         }
         String normalized = error == null || error.isBlank()
                 ? "agent execution failed"
                 : error;
-        runtimeService.fail(run.runId(), workerId, normalized);
-        return runtimeService.appendEvent(
+        runtimeService.fail(run.runId(), workerId, run.leaseEpoch(), normalized);
+        return runtimeService.appendSystemEvent(
                 run.runId(), AgentRunEventType.RUN_FAILED, Map.of("error", normalized));
     }
 
@@ -216,21 +248,27 @@ public class AgentRuntimeExecutor {
         }
     }
 
-    private AgentRun requireRun(String runId) {
-        AgentRun run = runtimeService.find(runId);
-        if (run == null) {
-            throw new IllegalArgumentException("agent run not found: " + runId);
-        }
-        return run;
+    private AgentRunLeaseHeartbeat heartbeat(AgentRun run, String workerId) {
+        return heartbeatFactory == null
+                ? null
+                : heartbeatFactory.start(run.runId(), workerId, run.leaseEpoch());
     }
 
-    private AgentRunEvent emit(
-            String runId,
+    private void assertHeartbeat(AgentRunLeaseHeartbeat heartbeat) {
+        if (heartbeat != null) {
+            heartbeat.assertActive();
+        }
+    }
+
+    private AgentRunEvent emitWorker(
+            AgentRun run,
+            String workerId,
             AgentRunEventType type,
             Object payload,
             Consumer<AgentRunEvent> eventConsumer
     ) {
-        AgentRunEvent event = runtimeService.appendEvent(runId, type, payload);
+        AgentRunEvent event = runtimeService.appendWorkerEvent(
+                run.runId(), workerId, run.leaseEpoch(), type, payload);
         if (eventConsumer != null) {
             eventConsumer.accept(event);
         }
@@ -245,12 +283,19 @@ public class AgentRuntimeExecutor {
 
         private final AgentRun run;
         private final String workerId;
+        private final AgentRunLeaseHeartbeat heartbeat;
         private final Consumer<AgentRunEvent> consumer;
         private final Map<String, PendingToolAssessment> pendingAssessments = new HashMap<>();
 
-        private RuntimeObserver(AgentRun run, String workerId, Consumer<AgentRunEvent> consumer) {
+        private RuntimeObserver(
+                AgentRun run,
+                String workerId,
+                AgentRunLeaseHeartbeat heartbeat,
+                Consumer<AgentRunEvent> consumer
+        ) {
             this.run = run;
             this.workerId = workerId;
+            this.heartbeat = heartbeat;
             this.consumer = consumer;
         }
 
@@ -260,26 +305,34 @@ public class AgentRuntimeExecutor {
 
         @Override
         public void modelStarted(int step) {
-            runtimeService.checkpoint(runId(), workerId, step, Map.of("phase", "MODEL", "step", step));
+            assertHeartbeat(heartbeat);
+            runtimeService.checkpoint(
+                    runId(), workerId, run.leaseEpoch(), step,
+                    Map.of("phase", "MODEL", "step", step));
             traceRecorder.recordModelRequest(run.traceId(), step, Map.of("runtimeRunId", run.runId()));
-            emit(runId(), AgentRunEventType.MODEL_STARTED, Map.of("step", step), consumer);
+            emitWorker(run, workerId, AgentRunEventType.MODEL_STARTED,
+                    Map.of("step", step), consumer);
         }
 
         @Override
         public void tokenDelta(int step, String delta) {
-            emit(runId(), AgentRunEventType.TOKEN_DELTA,
+            assertHeartbeat(heartbeat);
+            emitWorker(run, workerId, AgentRunEventType.TOKEN_DELTA,
                     Map.of("step", step, "delta", delta), consumer);
         }
 
         @Override
         public void modelCompleted(int step) {
-            emit(runId(), AgentRunEventType.MODEL_COMPLETED, Map.of("step", step), consumer);
+            assertHeartbeat(heartbeat);
+            emitWorker(run, workerId, AgentRunEventType.MODEL_COMPLETED,
+                    Map.of("step", step), consumer);
         }
 
         @Override
         public void toolCallRequested(int step, String toolName, String arguments) {
+            assertHeartbeat(heartbeat);
             traceRecorder.recordToolCall(run.traceId(), step, toolName, arguments);
-            emit(runId(), AgentRunEventType.TOOL_CALL_REQUESTED,
+            emitWorker(run, workerId, AgentRunEventType.TOOL_CALL_REQUESTED,
                     Map.of("step", step, "toolName", toolName,
                             "arguments", sanitizer.preview(arguments)), consumer);
         }
@@ -293,6 +346,7 @@ public class AgentRuntimeExecutor {
         public boolean requiresApproval(
                 int step, String toolCallId, String toolName, String arguments
         ) {
+            assertHeartbeat(heartbeat);
             if (toolExecutionPipeline == null) {
                 return requiresApproval(step, toolName, arguments);
             }
@@ -323,6 +377,7 @@ public class AgentRuntimeExecutor {
         public void approvalRequired(
                 int step, String toolName, String arguments, String checkpointJson
         ) {
+            assertHeartbeat(heartbeat);
             AgentRunEvent event = approvalPauseService.pause(
                     run, workerId, step, toolName, arguments, checkpointJson);
             if (consumer != null) {
@@ -338,6 +393,7 @@ public class AgentRuntimeExecutor {
                 String arguments,
                 String checkpointJson
         ) {
+            assertHeartbeat(heartbeat);
             if (toolExecutionPipeline == null) {
                 approvalRequired(step, toolName, arguments, checkpointJson);
                 return;
@@ -367,6 +423,7 @@ public class AgentRuntimeExecutor {
                 String toolName,
                 String arguments
         ) {
+            assertHeartbeat(heartbeat);
             if (toolExecutionPipeline == null) {
                 return null;
             }
@@ -403,15 +460,17 @@ public class AgentRuntimeExecutor {
 
         @Override
         public void toolStarted(int step, String toolName) {
-            emit(runId(), AgentRunEventType.TOOL_STARTED,
+            assertHeartbeat(heartbeat);
+            emitWorker(run, workerId, AgentRunEventType.TOOL_STARTED,
                     Map.of("step", step, "toolName", toolName), consumer);
         }
 
         @Override
         public void toolCompleted(int step, String toolName, boolean success, String observation) {
+            assertHeartbeat(heartbeat);
             traceRecorder.recordToolObservation(
                     run.traceId(), step, toolName, success, observation, Duration.ZERO);
-            emit(runId(), AgentRunEventType.TOOL_COMPLETED,
+            emitWorker(run, workerId, AgentRunEventType.TOOL_COMPLETED,
                     Map.of("step", step, "toolName", toolName, "success", success,
                             "observation", observation == null ? "" : sanitizer.preview(observation)), consumer);
         }

@@ -75,6 +75,29 @@ public class InMemoryAgentRunRepository implements AgentRunRepository {
     }
 
     @Override
+    public synchronized AgentRun renewLease(
+            String runId,
+            String workerId,
+            long leaseEpoch,
+            Instant now,
+            Duration leaseDuration
+    ) {
+        AgentRun current = runs.get(runId);
+        if (current == null) {
+            return null;
+        }
+        AgentRun renewed;
+        try {
+            renewed = current.renewLease(
+                    workerId, leaseEpoch, now, now.plus(requireLeaseDuration(leaseDuration)));
+        } catch (IllegalStateException exception) {
+            return null;
+        }
+        runs.put(runId, renewed);
+        return renewed;
+    }
+
+    @Override
     public synchronized AgentRun update(AgentRun run, long expectedVersion, String requiredLeaseOwner) {
         AgentRun current = runs.get(run.runId());
         if (current == null || current.version() != expectedVersion || run.version() != expectedVersion + 1) {
@@ -104,6 +127,22 @@ public class InMemoryAgentRunRepository implements AgentRunRepository {
         events.computeIfAbsent(runId, ignored -> new ArrayList<>()).add(event);
         runs.put(runId, current.withEventSequence(sequence, createdAt));
         return event;
+    }
+
+    @Override
+    public synchronized AgentRunEvent appendWorkerEvent(
+            String runId,
+            String workerId,
+            long leaseEpoch,
+            AgentRunEventType type,
+            String payloadJson,
+            Instant createdAt
+    ) {
+        AgentRun current = runs.get(runId);
+        if (current == null || !current.holdsLease(workerId, leaseEpoch, createdAt)) {
+            return null;
+        }
+        return appendEvent(runId, type, payloadJson, createdAt);
     }
 
     @Override

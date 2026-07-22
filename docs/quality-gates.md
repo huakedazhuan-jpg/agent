@@ -19,7 +19,7 @@ The baseline job runs the complete default test suite and packages the applicati
 
 The database job starts a PostgreSQL 17 service container with a health check and then:
 
-1. Applies all available Flyway migrations (currently V1-V12) to an isolated schema.
+1. Applies all available Flyway migrations (currently V1-V13) to an isolated schema.
 2. Verifies durable Agent Run, lease expiry, checkpoint, event ordering, approval recovery, and Feishu approval/final/failure notification-outbox persistence, statistics, dead-letter, and manual-retry behavior.
 3. Seeds a Run in `WAITING_APPROVAL` and records `pg_postmaster_start_time()`.
 4. Restarts the actual PostgreSQL service process.

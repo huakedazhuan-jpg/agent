@@ -89,7 +89,7 @@ class RealPostgresAgentRuntimeIntegrationTest {
                 new DataSourceTransactionManager(runtimeDataSource));
 
         transaction.executeWithoutResult(ignored -> failureService.fail(
-                created.runId(), claim.run().leaseOwner(),
+                created.runId(), claim.run().leaseOwner(), claim.run().leaseEpoch(),
                 "api_key=secret-value model unavailable"));
 
         AgentRun afterRestart = new AgentRuntimeService(
@@ -208,6 +208,7 @@ class RealPostgresAgentRuntimeIntegrationTest {
                 approvalId,
                 "{\"schemaVersion\":1,\"toolCall\":{\"id\":\"call-1\"}}",
                 "worker-after-expiry",
+                reclaimed.run().leaseEpoch(),
                 now.plusSeconds(7)
         );
         AgentRun waiting = secondProcess.update(
@@ -303,7 +304,7 @@ class RealPostgresAgentRuntimeIntegrationTest {
         assertThat(new JdbcTemplate(runtimeDataSource).queryForObject(
                 "SELECT MAX(CAST(version AS INTEGER)) FROM flyway_schema_history WHERE success",
                 Integer.class
-        )).isGreaterThanOrEqualTo(12);
+        )).isGreaterThanOrEqualTo(13);
         assertThat(waiting).isNotNull();
     }
 

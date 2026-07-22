@@ -16,10 +16,27 @@ public interface AgentRunRepository {
 
     AgentRunClaim claim(String runId, String workerId, Instant now, Duration leaseDuration);
 
+    AgentRun renewLease(
+            String runId,
+            String workerId,
+            long leaseEpoch,
+            Instant now,
+            Duration leaseDuration
+    );
+
     AgentRun update(AgentRun run, long expectedVersion, String requiredLeaseOwner);
 
     AgentRunEvent appendEvent(
             String runId,
+            AgentRunEventType type,
+            String payloadJson,
+            Instant createdAt
+    );
+
+    AgentRunEvent appendWorkerEvent(
+            String runId,
+            String workerId,
+            long leaseEpoch,
             AgentRunEventType type,
             String payloadJson,
             Instant createdAt

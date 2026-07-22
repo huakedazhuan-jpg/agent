@@ -36,8 +36,9 @@ class AgentRunCoordinatorTest {
         doAnswer(invocation -> {
             String runId = invocation.getArgument(0);
             String workerId = invocation.getArgument(1);
-            runtime.claim(runId, workerId);
-            runtime.complete(runId, workerId, "coordinated answer");
+            AgentRunClaim claim = runtime.claim(runId, workerId);
+            runtime.complete(
+                    runId, workerId, claim.run().leaseEpoch(), "coordinated answer");
             return null;
         }).when(executor).execute(anyString(), anyString(), isNull());
         AgentRunCoordinator coordinator = new AgentRunCoordinator(

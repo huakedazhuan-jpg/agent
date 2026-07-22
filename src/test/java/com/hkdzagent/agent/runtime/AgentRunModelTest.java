@@ -67,12 +67,12 @@ class AgentRunModelTest {
         assertThatIllegalArgumentException().isThrownBy(() -> new AgentRun(
                 created.runId(), created.ownerKey(), created.sessionId(), created.conversationId(),
                 created.traceId(), created.userMessage(), AgentRunStatus.COMPLETED, 1, 5,
-                1, 1, "{}", null, "answer", null, null, null, now, now, null
+                1, 1, "{}", null, "answer", null, null, null, 0, now, now, null
         ));
         assertThatIllegalArgumentException().isThrownBy(() -> new AgentRun(
                 created.runId(), created.ownerKey(), created.sessionId(), created.conversationId(),
                 created.traceId(), created.userMessage(), AgentRunStatus.WAITING_APPROVAL, 1, 5,
-                1, 1, "{}", null, null, null, null, null, now, now, null
+                1, 1, "{}", null, null, null, null, null, 0, now, now, null
         ));
     }
 
@@ -102,8 +102,10 @@ class AgentRunModelTest {
         );
         AgentRun running = created.claim("worker-a", now, now.plusSeconds(30));
 
-        AgentRun completed = running.complete("answer", "worker-a", now.plusSeconds(1));
-        AgentRun failed = running.fail("model unavailable", "worker-a", now.plusSeconds(1));
+        AgentRun completed = running.complete(
+                "answer", "worker-a", running.leaseEpoch(), now.plusSeconds(1));
+        AgentRun failed = running.fail(
+                "model unavailable", "worker-a", running.leaseEpoch(), now.plusSeconds(1));
 
         assertThat(completed.status()).isEqualTo(AgentRunStatus.COMPLETED);
         assertThat(completed.finalAnswer()).isEqualTo("answer");
@@ -122,7 +124,8 @@ class AgentRunModelTest {
                         "session-1", "conversation-1", "trace-1", "question", 5, now)
                 .claim("worker-a", now, now.plusSeconds(30));
         AgentRun waiting = running.waitForApproval(
-                approvalId, "{\"toolCall\":{}}", "worker-a", now.plusSeconds(1));
+                approvalId, "{\"toolCall\":{}}", "worker-a",
+                running.leaseEpoch(), now.plusSeconds(1));
 
         assertThat(waiting.status()).isEqualTo(AgentRunStatus.WAITING_APPROVAL);
         assertThat(waiting.pendingApprovalId()).isEqualTo(approvalId);

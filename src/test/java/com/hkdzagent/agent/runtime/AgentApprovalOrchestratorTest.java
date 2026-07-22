@@ -99,7 +99,8 @@ class AgentApprovalOrchestratorTest {
                 now.minusSeconds(60), now.minusSeconds(1), null
         ));
         fixture.runtime.waitForApproval(
-                run.runId(), claim.run().leaseOwner(), approvalId, "{\"step\":1}");
+                run.runId(), claim.run().leaseOwner(), claim.run().leaseEpoch(),
+                approvalId, "{\"step\":1}");
 
         fixture.orchestrator.recoverDecidedApprovals();
 

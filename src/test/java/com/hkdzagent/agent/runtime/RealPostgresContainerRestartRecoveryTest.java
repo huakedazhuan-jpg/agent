@@ -94,6 +94,7 @@ class RealPostgresContainerRestartRecoveryTest {
                         pending.id(),
                         "{\"schemaVersion\":1,\"toolCall\":{\"id\":\"restart-call\"}}",
                         "worker-before-db-restart",
+                        claimed.run().leaseEpoch(),
                         now.plusSeconds(1)
                 ),
                 claimed.run().version(),

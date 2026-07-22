@@ -100,7 +100,8 @@ class ApprovedToolExecutionServiceTest {
                  "toolCall":{"id":"call-1","function":{"name":"writeFile","arguments":%s}}}
                 """.formatted(objectMapper.valueToTree(checkpointArguments).toString());
         runtime.waitForApproval(
-                created.runId(), claim.run().leaseOwner(), APPROVAL_ID, checkpoint);
+                created.runId(), claim.run().leaseOwner(), claim.run().leaseEpoch(),
+                APPROVAL_ID, checkpoint);
         AgentRun running = runtime.resumeApproval(
                 created.runId(), APPROVAL_ID, "approval-worker");
         return new Fixture(

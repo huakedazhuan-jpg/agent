@@ -59,13 +59,25 @@ public class AgentRuntimeService {
         return repository.claim(runId, workerId, clock.instant(), properties.getLeaseDuration());
     }
 
-    public AgentRun checkpoint(String runId, String workerId, int step, Object checkpoint) {
+    public AgentRun renewLease(String runId, String workerId, long leaseEpoch) {
+        AgentRun renewed = repository.renewLease(
+                runId, workerId, leaseEpoch, clock.instant(), properties.getLeaseDuration());
+        if (renewed == null) {
+            throw new AgentRunLeaseLostException("agent run lease fence was lost");
+        }
+        return renewed;
+    }
+
+    public AgentRun checkpoint(
+            String runId, String workerId, long leaseEpoch, int step, Object checkpoint
+    ) {
         Instant now = clock.instant();
         AgentRun current = requireRun(runId);
         AgentRun next = current.advance(
                 step,
                 json(checkpoint),
                 workerId,
+                leaseEpoch,
                 now,
                 now.plus(properties.getLeaseDuration())
         );
@@ -76,22 +88,22 @@ public class AgentRuntimeService {
         return persisted;
     }
 
-    public AgentRun complete(String runId, String workerId, String answer) {
+    public AgentRun complete(String runId, String workerId, long leaseEpoch, String answer) {
         Instant now = clock.instant();
         AgentRun current = requireRun(runId);
         AgentRun persisted = repository.update(
-                current.complete(answer, workerId, now), current.version(), workerId);
+                current.complete(answer, workerId, leaseEpoch, now), current.version(), workerId);
         if (persisted == null) {
             throw new IllegalStateException("agent run changed concurrently or worker lease was lost");
         }
         return persisted;
     }
 
-    public AgentRun fail(String runId, String workerId, String error) {
+    public AgentRun fail(String runId, String workerId, long leaseEpoch, String error) {
         Instant now = clock.instant();
         AgentRun current = requireRun(runId);
         AgentRun persisted = repository.update(
-                current.fail(error, workerId, now), current.version(), workerId);
+                current.fail(error, workerId, leaseEpoch, now), current.version(), workerId);
         if (persisted == null) {
             throw new IllegalStateException("agent run changed concurrently or worker lease was lost");
         }
@@ -99,12 +111,14 @@ public class AgentRuntimeService {
     }
 
     public AgentRun waitForApproval(
-            String runId, String workerId, String approvalId, String checkpointJson
+            String runId, String workerId, long leaseEpoch,
+            String approvalId, String checkpointJson
     ) {
         Instant now = clock.instant();
         AgentRun current = requireRun(runId);
         AgentRun persisted = repository.update(
-                current.waitForApproval(approvalId, checkpointJson, workerId, now),
+                current.waitForApproval(
+                        approvalId, checkpointJson, workerId, leaseEpoch, now),
                 current.version(), workerId);
         if (persisted == null) {
             throw new IllegalStateException("agent run changed concurrently or worker lease was lost");
@@ -141,9 +155,28 @@ public class AgentRuntimeService {
     }
 
     public AgentRunEvent appendEvent(String runId, AgentRunEventType type, Object payload) {
+        return appendSystemEvent(runId, type, payload);
+    }
+
+    public AgentRunEvent appendSystemEvent(String runId, AgentRunEventType type, Object payload) {
         AgentRunEvent event = repository.appendEvent(runId, type, json(payload), clock.instant());
         if (event == null) {
             throw new IllegalArgumentException("agent run not found: " + runId);
+        }
+        return event;
+    }
+
+    public AgentRunEvent appendWorkerEvent(
+            String runId,
+            String workerId,
+            long leaseEpoch,
+            AgentRunEventType type,
+            Object payload
+    ) {
+        AgentRunEvent event = repository.appendWorkerEvent(
+                runId, workerId, leaseEpoch, type, json(payload), clock.instant());
+        if (event == null) {
+            throw new AgentRunLeaseLostException("agent run Worker lease fence was lost");
         }
         return event;
     }
@@ -184,6 +217,13 @@ public class AgentRuntimeService {
                 || candidate.getLeaseDuration().isZero()
                 || candidate.getLeaseDuration().isNegative()) {
             throw new IllegalArgumentException("agent.runtime.lease-duration must be positive");
+        }
+        if (candidate.getHeartbeatInterval() == null
+                || candidate.getHeartbeatInterval().isZero()
+                || candidate.getHeartbeatInterval().isNegative()
+                || candidate.getHeartbeatInterval().compareTo(candidate.getLeaseDuration()) >= 0) {
+            throw new IllegalArgumentException(
+                    "agent.runtime.heartbeat-interval must be positive and shorter than lease-duration");
         }
         if (candidate.getEventReplayLimit() < 1) {
             throw new IllegalArgumentException("agent.runtime.event-replay-limit must be positive");

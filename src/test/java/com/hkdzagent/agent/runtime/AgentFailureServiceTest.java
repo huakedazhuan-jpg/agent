@@ -34,7 +34,8 @@ class AgentFailureServiceTest {
         AgentRunClaim claim = runtime.claim(created.runId(), "worker-1");
 
         AgentRunEvent event = service.fail(
-                created.runId(), claim.run().leaseOwner(), "model unavailable");
+                created.runId(), claim.run().leaseOwner(), claim.run().leaseEpoch(),
+                "model unavailable");
 
         AgentRun failed = runtime.find(created.runId());
         assertThat(failed.status()).isEqualTo(AgentRunStatus.FAILED);
@@ -52,7 +53,8 @@ class AgentFailureServiceTest {
         AgentRunClaim claim = runtime.claim(created.runId(), "worker-2");
         String approvalId = UUID.randomUUID().toString();
         runtime.waitForApproval(
-                created.runId(), claim.run().leaseOwner(), approvalId, "{}");
+                created.runId(), claim.run().leaseOwner(), claim.run().leaseEpoch(),
+                approvalId, "{}");
 
         service.rejectApproval(created.runId(), approvalId, "not allowed");
 

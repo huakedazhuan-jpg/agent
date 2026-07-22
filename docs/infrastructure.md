@@ -44,7 +44,7 @@ $env:SPRING_FLYWAY_ENABLED = "true"
 .\mvnw.cmd spring-boot:run
 ```
 
-Migrations V1-V12 create durable state for:
+Migrations V1-V13 create durable state for:
 
 - conversations and messages
 - Agent trace aggregates and events

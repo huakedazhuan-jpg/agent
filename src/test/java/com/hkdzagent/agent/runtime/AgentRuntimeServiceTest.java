@@ -31,8 +31,11 @@ class AgentRuntimeServiceTest {
         AgentRun created = service.create(owner, "session-1", "conversation-1", "trace-1", "question");
         AgentRunClaim claim = service.claim(created.runId(), "worker-a");
         AgentRun checkpointed = service.checkpoint(
-                created.runId(), "worker-a", 1, Map.of("messages", 2));
-        service.appendEvent(created.runId(), AgentRunEventType.MODEL_STARTED, Map.of("step", 1));
+                created.runId(), "worker-a", claim.run().leaseEpoch(),
+                1, Map.of("messages", 2));
+        service.appendWorkerEvent(
+                created.runId(), "worker-a", claim.run().leaseEpoch(),
+                AgentRunEventType.MODEL_STARTED, Map.of("step", 1));
 
         assertThat(claim.started()).isTrue();
         assertThat(checkpointed.currentStep()).isOne();

@@ -18,6 +18,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 import java.time.Clock;
 import java.util.concurrent.Executor;
@@ -61,12 +62,33 @@ public class AgentRuntimeConfig {
             ToolExecutionPipeline toolExecutionPipeline,
             ApprovedToolExecutionService approvedToolExecutionService,
             AgentCompletionService completionService,
-            AgentFailureService failureService
+            AgentFailureService failureService,
+            AgentRunLeaseHeartbeatFactory heartbeatFactory
     ) {
         return new AgentRuntimeExecutor(
                 runtimeService, llmClient, traceRecorder, sanitizer,
                 approvalPauseService, confirmationProperties, toolExecutionPipeline,
-                approvedToolExecutionService, completionService, failureService);
+                approvedToolExecutionService, completionService, failureService, heartbeatFactory);
+    }
+
+    @Bean(name = "agentRuntimeHeartbeatScheduler", destroyMethod = "shutdown")
+    public ThreadPoolTaskScheduler agentRuntimeHeartbeatScheduler() {
+        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setPoolSize(2);
+        scheduler.setThreadNamePrefix("agent-heartbeat-");
+        scheduler.setDaemon(true);
+        scheduler.initialize();
+        return scheduler;
+    }
+
+    @Bean
+    public AgentRunLeaseHeartbeatFactory agentRunLeaseHeartbeatFactory(
+            AgentRuntimeService runtimeService,
+            @Qualifier("agentRuntimeHeartbeatScheduler") ThreadPoolTaskScheduler scheduler,
+            AgentRuntimeProperties properties
+    ) {
+        return new AgentRunLeaseHeartbeatFactory(
+                runtimeService, scheduler, properties.getHeartbeatInterval());
     }
 
     @Bean

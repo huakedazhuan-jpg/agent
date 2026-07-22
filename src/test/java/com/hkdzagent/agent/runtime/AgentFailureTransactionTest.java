@@ -45,7 +45,8 @@ class AgentFailureTransactionTest {
             AgentRunClaim claim = runtime.claim(created.runId(), "worker-1");
 
             assertThatThrownBy(() -> context.getBean(AgentFailureService.class).fail(
-                    created.runId(), claim.run().leaseOwner(), "model unavailable"))
+                    created.runId(), claim.run().leaseOwner(), claim.run().leaseEpoch(),
+                    "model unavailable"))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessage("outbox unavailable");
 
@@ -69,6 +70,7 @@ class AgentFailureTransactionTest {
                     last_event_sequence BIGINT NOT NULL, checkpoint JSON NOT NULL,
                     pending_approval_id UUID, final_answer CLOB, error_message CLOB,
                     lease_owner VARCHAR(128), lease_expires_at TIMESTAMP,
+                    lease_epoch BIGINT NOT NULL DEFAULT 0,
                     created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL,
                     completed_at TIMESTAMP
                 )

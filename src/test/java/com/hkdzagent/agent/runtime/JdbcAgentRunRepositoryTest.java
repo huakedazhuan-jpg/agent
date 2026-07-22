@@ -38,6 +38,7 @@ class JdbcAgentRunRepositoryTest {
                     last_event_sequence BIGINT NOT NULL, checkpoint JSON NOT NULL,
                     pending_approval_id UUID, final_answer CLOB, error_message CLOB,
                     lease_owner VARCHAR(128), lease_expires_at TIMESTAMP,
+                    lease_epoch BIGINT NOT NULL DEFAULT 0,
                     created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, completed_at TIMESTAMP
                 )
                 """);
@@ -78,6 +79,7 @@ class JdbcAgentRunRepositoryTest {
 
         AgentRunClaim first = repository.claim(stored.runId(), "worker-a", now, Duration.ofSeconds(30));
         assertThat(first.started()).isTrue();
+        assertThat(first.run().leaseEpoch()).isOne();
         assertThat(repository.claim(stored.runId(), "worker-b", now.plusSeconds(1), Duration.ofSeconds(30))).isNull();
         AgentRunClaim reclaimed = repository.claim(
                 stored.runId(), "worker-b", now.plusSeconds(31), Duration.ofSeconds(30));
@@ -85,13 +87,30 @@ class JdbcAgentRunRepositoryTest {
         assertThat(reclaimed).isNotNull();
         assertThat(reclaimed.started()).isFalse();
         assertThat(reclaimed.run().leaseOwner()).isEqualTo("worker-b");
+        assertThat(reclaimed.run().leaseEpoch()).isEqualTo(2);
+        assertThat(repository.appendWorkerEvent(
+                stored.runId(), "worker-a", first.run().leaseEpoch(),
+                AgentRunEventType.TOKEN_DELTA, "{}", now.plusSeconds(32))).isNull();
+        assertThat(repository.appendWorkerEvent(
+                stored.runId(), "worker-b", reclaimed.run().leaseEpoch(),
+                AgentRunEventType.TOKEN_DELTA, "{}", now.plusSeconds(32))).isNotNull();
+        assertThat(repository.renewLease(
+                stored.runId(), "worker-a", first.run().leaseEpoch(),
+                now.plusSeconds(32), Duration.ofSeconds(30))).isNull();
+        AgentRun renewed = repository.renewLease(
+                stored.runId(), "worker-b", reclaimed.run().leaseEpoch(),
+                now.plusSeconds(32), Duration.ofSeconds(30));
+        assertThat(renewed.leaseEpoch()).isEqualTo(reclaimed.run().leaseEpoch());
+        assertThat(renewed.leaseExpiresAt()).isEqualTo(now.plusSeconds(62));
     }
 
     @Test
     void rejectsStaleStateUpdateAndPreservesLatestEventSequence() {
         AgentRun stored = repository.create(run("user-a"), "{}");
         AgentRunClaim claim = repository.claim(stored.runId(), "worker-a", now, Duration.ofSeconds(30));
-        AgentRun next = claim.run().advance(1, "{\"step\":1}", "worker-a", now.plusSeconds(1));
+        AgentRun next = claim.run().advance(
+                1, "{\"step\":1}", "worker-a",
+                claim.run().leaseEpoch(), now.plusSeconds(1));
         repository.appendEvent(stored.runId(), AgentRunEventType.MODEL_STARTED, "{}", now.plusSeconds(1));
 
         AgentRun updated = repository.update(next, claim.run().version(), "worker-a");

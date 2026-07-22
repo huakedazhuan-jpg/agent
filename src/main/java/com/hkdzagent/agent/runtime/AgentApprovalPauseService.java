@@ -65,8 +65,8 @@ public class AgentApprovalPauseService {
                 new ActorIdentity(run.ownerKey()), run.sessionId(), run.traceId(), run.runId(),
                 toolName, arguments);
         AgentRun waiting = runtimeService.waitForApproval(
-                run.runId(), workerId, confirmation.id(), checkpointJson);
-        AgentRunEvent event = runtimeService.appendEvent(
+                run.runId(), workerId, run.leaseEpoch(), confirmation.id(), checkpointJson);
+        AgentRunEvent event = runtimeService.appendSystemEvent(
                 run.runId(), AgentRunEventType.APPROVAL_REQUIRED, Map.of(
                 "step", step,
                 "approvalId", confirmation.id(),
@@ -91,8 +91,8 @@ public class AgentApprovalPauseService {
         ToolConfirmation confirmation = confirmationService.requestConfirmationForAssessment(
                 run.sessionId(), context, assessment);
         AgentRun waiting = runtimeService.waitForApproval(
-                run.runId(), workerId, confirmation.id(), checkpointJson);
-        AgentRunEvent event = runtimeService.appendEvent(
+                run.runId(), workerId, run.leaseEpoch(), confirmation.id(), checkpointJson);
+        AgentRunEvent event = runtimeService.appendSystemEvent(
                 run.runId(), AgentRunEventType.APPROVAL_REQUIRED, Map.of(
                 "step", step,
                 "approvalId", confirmation.id(),

@@ -19,10 +19,12 @@ public class AgentFailureService {
     }
 
     @Transactional
-    public AgentRunEvent fail(String runId, String workerId, String error) {
+    public AgentRunEvent fail(
+            String runId, String workerId, long leaseEpoch, String error
+    ) {
         String safeError = normalizeError(error);
-        AgentRun failed = runtimeService.fail(runId, workerId, safeError);
-        AgentRunEvent event = runtimeService.appendEvent(
+        AgentRun failed = runtimeService.fail(runId, workerId, leaseEpoch, safeError);
+        AgentRunEvent event = runtimeService.appendSystemEvent(
                 runId, AgentRunEventType.RUN_FAILED, Map.of("error", safeError));
         outboxService.enqueueFailedRun(failed);
         return event;
@@ -36,7 +38,7 @@ public class AgentFailureService {
     ) {
         String safeReason = normalizeError(reason);
         AgentRun failed = runtimeService.rejectApproval(runId, approvalId, safeReason);
-        AgentRunEvent event = runtimeService.appendEvent(
+        AgentRunEvent event = runtimeService.appendSystemEvent(
                 runId, AgentRunEventType.RUN_FAILED, Map.of(
                         "error", safeReason,
                         "approvalId", approvalId
