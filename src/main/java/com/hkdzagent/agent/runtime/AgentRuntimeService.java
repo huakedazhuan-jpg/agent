@@ -59,6 +59,11 @@ public class AgentRuntimeService {
         return repository.claim(runId, workerId, clock.instant(), properties.getLeaseDuration());
     }
 
+    public AgentRunClaim claimNextExpired(String workerId) {
+        return repository.claimNextExpired(
+                workerId, clock.instant(), properties.getLeaseDuration());
+    }
+
     public AgentRun renewLease(String runId, String workerId, long leaseEpoch) {
         AgentRun renewed = repository.renewLease(
                 runId, workerId, leaseEpoch, clock.instant(), properties.getLeaseDuration());

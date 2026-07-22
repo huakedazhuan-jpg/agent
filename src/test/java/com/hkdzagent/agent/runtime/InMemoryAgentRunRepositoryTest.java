@@ -80,6 +80,34 @@ class InMemoryAgentRunRepositoryTest {
                 .containsExactly(2L, 3L);
     }
 
+    @Test
+    void atomicallyClaimsOldestExpiredRunningRun() {
+        AgentRun oldest = repository.create(run("user-oldest", now), "{}");
+        AgentRun later = repository.create(run("user-later", now.plusSeconds(1)), "{}");
+        AgentRun neverStarted = repository.create(run("user-created", now.plusSeconds(2)), "{}");
+        AgentRunClaim oldestInitial = repository.claim(
+                oldest.runId(), "worker-old", now, Duration.ofSeconds(10));
+        AgentRunClaim laterInitial = repository.claim(
+                later.runId(), "worker-later", now, Duration.ofSeconds(30));
+
+        AgentRunClaim recovered = repository.claimNextExpired(
+                "recovery-worker", now.plusSeconds(10), Duration.ofSeconds(20));
+
+        assertThat(recovered).isNotNull();
+        assertThat(recovered.started()).isFalse();
+        assertThat(recovered.run().runId()).isEqualTo(oldest.runId());
+        assertThat(recovered.run().leaseOwner()).isEqualTo("recovery-worker");
+        assertThat(recovered.run().leaseEpoch())
+                .isEqualTo(oldestInitial.run().leaseEpoch() + 1);
+        assertThat(recovered.run().leaseExpiresAt()).isEqualTo(now.plusSeconds(30));
+        assertThat(repository.claimNextExpired(
+                "another-worker", now.plusSeconds(10), Duration.ofSeconds(20))).isNull();
+        assertThat(repository.findById(later.runId()).leaseEpoch())
+                .isEqualTo(laterInitial.run().leaseEpoch());
+        assertThat(repository.findById(neverStarted.runId()).status())
+                .isEqualTo(AgentRunStatus.CREATED);
+    }
+
     private AgentRun run(String userId, Instant createdAt) {
         return AgentRun.created(
                 UUID.randomUUID().toString(), ActorIdentity.user(userId), "session-1",

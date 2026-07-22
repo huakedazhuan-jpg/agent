@@ -26,7 +26,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -132,7 +137,7 @@ class RealPostgresAgentRuntimeIntegrationTest {
                 new DataSourceTransactionManager(runtimeDataSource));
 
         transaction.executeWithoutResult(ignored -> pauseService.pause(
-                created, claim.run().leaseOwner(), 1,
+                claim.run(), claim.run().leaseOwner(), 1,
                 "commandExecuteTool", "{\"command\":\"mvn test\"}",
                 "{\"schemaVersion\":1,\"toolCall\":{}}"));
 
@@ -151,6 +156,54 @@ class RealPostgresAgentRuntimeIntegrationTest {
         assertThat(runtimeRepository().findEventsAfter(created.runId(), 0, 10))
                 .extracting(AgentRunEvent::type)
                 .contains(AgentRunEventType.APPROVAL_REQUIRED);
+    }
+
+    @Test
+    void concurrentRecoveryWorkersClaimExpiredRunOnlyOnce() throws Exception {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        JdbcAgentRunRepository setupRepository = runtimeRepository();
+        AgentRun stored = setupRepository.create(AgentRun.created(
+                UUID.randomUUID().toString(),
+                ActorIdentity.user("postgres-recovery-user"),
+                "recovery-session",
+                "recovery-conversation",
+                UUID.randomUUID().toString(),
+                "recover after crash",
+                5,
+                now
+        ), "{}");
+        AgentRunClaim initial = setupRepository.claim(
+                stored.runId(), "initial-worker", now, Duration.ofSeconds(5));
+        JdbcAgentRunRepository firstRepository = runtimeRepository();
+        JdbcAgentRunRepository secondRepository = runtimeRepository();
+        CyclicBarrier start = new CyclicBarrier(2);
+        ExecutorService workers = Executors.newFixedThreadPool(2);
+        try {
+            Future<AgentRunClaim> first = workers.submit(() -> {
+                start.await();
+                return firstRepository.claimNextExpired(
+                        "recovery-a", now.plusSeconds(6), Duration.ofSeconds(30));
+            });
+            Future<AgentRunClaim> second = workers.submit(() -> {
+                start.await();
+                return secondRepository.claimNextExpired(
+                        "recovery-b", now.plusSeconds(6), Duration.ofSeconds(30));
+            });
+
+            List<AgentRunClaim> successful = java.util.stream.Stream.of(first.get(), second.get())
+                    .filter(java.util.Objects::nonNull)
+                    .toList();
+
+            assertThat(successful).singleElement().satisfies(claim -> {
+                assertThat(claim.run().runId()).isEqualTo(stored.runId());
+                assertThat(claim.run().leaseEpoch())
+                        .isEqualTo(initial.run().leaseEpoch() + 1);
+            });
+            assertThat(runtimeRepository().findById(stored.runId()).leaseOwner())
+                    .isIn("recovery-a", "recovery-b");
+        } finally {
+            workers.shutdownNow();
+        }
     }
 
     @Test

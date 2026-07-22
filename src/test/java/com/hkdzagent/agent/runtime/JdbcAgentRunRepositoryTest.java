@@ -11,7 +11,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -118,6 +123,69 @@ class JdbcAgentRunRepositoryTest {
         assertThat(updated.currentStep()).isOne();
         assertThat(updated.lastEventSequence()).isEqualTo(2);
         assertThat(repository.update(next, claim.run().version(), "worker-a")).isNull();
+    }
+
+    @Test
+    void atomicallyClaimsOldestExpiredRunningRun() {
+        AgentRun oldest = repository.create(run("user-oldest"), "{}");
+        AgentRun later = repository.create(run("user-later"), "{}");
+        AgentRun neverStarted = repository.create(run("user-created"), "{}");
+        AgentRunClaim oldestInitial = repository.claim(
+                oldest.runId(), "worker-old", now, Duration.ofSeconds(10));
+        AgentRunClaim laterInitial = repository.claim(
+                later.runId(), "worker-later", now, Duration.ofSeconds(30));
+
+        AgentRunClaim recovered = repository.claimNextExpired(
+                "recovery-worker", now.plusSeconds(10), Duration.ofSeconds(20));
+
+        assertThat(recovered).isNotNull();
+        assertThat(recovered.started()).isFalse();
+        assertThat(recovered.run().runId()).isEqualTo(oldest.runId());
+        assertThat(recovered.run().leaseOwner()).isEqualTo("recovery-worker");
+        assertThat(recovered.run().leaseEpoch())
+                .isEqualTo(oldestInitial.run().leaseEpoch() + 1);
+        assertThat(recovered.run().leaseExpiresAt()).isEqualTo(now.plusSeconds(30));
+        assertThat(repository.claimNextExpired(
+                "another-worker", now.plusSeconds(10), Duration.ofSeconds(20))).isNull();
+        assertThat(repository.findById(later.runId()).leaseEpoch())
+                .isEqualTo(laterInitial.run().leaseEpoch());
+        assertThat(repository.findById(neverStarted.runId()).status())
+                .isEqualTo(AgentRunStatus.CREATED);
+    }
+
+    @Test
+    void allowsOnlyOneRecoveryWorkerToClaimExpiredRun() throws Exception {
+        AgentRun stored = repository.create(run("user-race"), "{}");
+        AgentRunClaim initial = repository.claim(
+                stored.runId(), "initial-worker", now, Duration.ofSeconds(5));
+        CyclicBarrier start = new CyclicBarrier(2);
+        ExecutorService workers = Executors.newFixedThreadPool(2);
+        try {
+            Future<AgentRunClaim> first = workers.submit(() -> {
+                start.await();
+                return repository.claimNextExpired(
+                        "recovery-a", now.plusSeconds(6), Duration.ofSeconds(30));
+            });
+            Future<AgentRunClaim> second = workers.submit(() -> {
+                start.await();
+                return repository.claimNextExpired(
+                        "recovery-b", now.plusSeconds(6), Duration.ofSeconds(30));
+            });
+
+            List<AgentRunClaim> successful = java.util.stream.Stream.of(first.get(), second.get())
+                    .filter(java.util.Objects::nonNull)
+                    .toList();
+
+            assertThat(successful).singleElement().satisfies(claim -> {
+                assertThat(claim.run().runId()).isEqualTo(stored.runId());
+                assertThat(claim.run().leaseEpoch())
+                        .isEqualTo(initial.run().leaseEpoch() + 1);
+            });
+            assertThat(repository.findById(stored.runId()).leaseOwner())
+                    .isIn("recovery-a", "recovery-b");
+        } finally {
+            workers.shutdownNow();
+        }
     }
 
     private AgentRun run(String userId) {

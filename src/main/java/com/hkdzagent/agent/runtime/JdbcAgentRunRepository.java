@@ -115,6 +115,42 @@ public class JdbcAgentRunRepository implements AgentRunRepository {
     }
 
     @Override
+    public AgentRunClaim claimNextExpired(
+            String workerId,
+            Instant now,
+            Duration leaseDuration
+    ) {
+        requireLeaseDuration(leaseDuration);
+        return transactions.execute(status -> {
+            List<String> runIds = jdbcTemplate.queryForList("""
+                    SELECT CAST(id AS VARCHAR)
+                    FROM agent_runs
+                    WHERE status = 'RUNNING'
+                      AND lease_expires_at IS NOT NULL
+                      AND lease_expires_at <= :now
+                    ORDER BY lease_expires_at ASC, created_at ASC, id ASC
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                    """,
+                    new MapSqlParameterSource("now", timestamp(now)),
+                    String.class);
+            if (runIds.isEmpty()) {
+                return null;
+            }
+            String runId = runIds.get(0);
+            AgentRun current = findById(runId);
+            if (current == null) {
+                return null;
+            }
+            AgentRun claimed = current.claim(workerId, now, now.plus(leaseDuration));
+            if (updateRow(claimed, current.version(), current.leaseOwner()) != 1) {
+                return null;
+            }
+            return new AgentRunClaim(findById(runId), false);
+        });
+    }
+
+    @Override
     public AgentRun renewLease(
             String runId,
             String workerId,

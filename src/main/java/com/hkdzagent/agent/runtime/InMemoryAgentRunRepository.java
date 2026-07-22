@@ -3,6 +3,7 @@ package com.hkdzagent.agent.runtime;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -72,6 +73,28 @@ public class InMemoryAgentRunRepository implements AgentRunRepository {
         }
         runs.put(runId, claimed);
         return new AgentRunClaim(claimed, started);
+    }
+
+    @Override
+    public synchronized AgentRunClaim claimNextExpired(
+            String workerId,
+            Instant now,
+            Duration leaseDuration
+    ) {
+        Duration validLeaseDuration = requireLeaseDuration(leaseDuration);
+        AgentRun current = runs.values().stream()
+                .filter(run -> run.status() == AgentRunStatus.RUNNING)
+                .filter(run -> run.leaseExpiresAt() != null && !run.leaseExpiresAt().isAfter(now))
+                .min(Comparator.comparing(AgentRun::leaseExpiresAt)
+                        .thenComparing(AgentRun::createdAt)
+                        .thenComparing(AgentRun::runId))
+                .orElse(null);
+        if (current == null) {
+            return null;
+        }
+        AgentRun claimed = current.claim(workerId, now, now.plus(validLeaseDuration));
+        runs.put(claimed.runId(), claimed);
+        return new AgentRunClaim(claimed, false);
     }
 
     @Override
