@@ -3,6 +3,11 @@ package com.hkdzagent.agent.runtime;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hkdzagent.agent.security.ActorIdentity;
+import com.hkdzagent.agent.context.ConservativeTokenCounter;
+import com.hkdzagent.agent.context.TokenCounter;
+import com.hkdzagent.agent.memory.ConversationMessageRepository;
+import com.hkdzagent.agent.memory.OwnedConversationId;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -17,6 +22,8 @@ public class AgentRuntimeService {
     private final AgentRuntimeProperties properties;
     private final ObjectMapper objectMapper;
     private final Clock clock;
+    private final ConversationMessageRepository messageRepository;
+    private final TokenCounter tokenCounter;
 
     public AgentRuntimeService(
             AgentRunRepository repository,
@@ -24,13 +31,30 @@ public class AgentRuntimeService {
             ObjectMapper objectMapper,
             Clock clock
     ) {
+        this(repository, properties, objectMapper, clock,
+                ConversationMessageRepository.NOOP, new ConservativeTokenCounter());
+    }
+
+    public AgentRuntimeService(
+            AgentRunRepository repository,
+            AgentRuntimeProperties properties,
+            ObjectMapper objectMapper,
+            Clock clock,
+            ConversationMessageRepository messageRepository,
+            TokenCounter tokenCounter
+    ) {
         this.repository = repository;
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.clock = clock;
+        this.messageRepository = messageRepository == null
+                ? ConversationMessageRepository.NOOP
+                : messageRepository;
+        this.tokenCounter = tokenCounter == null ? new ConservativeTokenCounter() : tokenCounter;
         validateProperties(properties);
     }
 
+    @Transactional
     public AgentRun create(
             ActorIdentity owner,
             String sessionId,
@@ -49,11 +73,17 @@ public class AgentRuntimeService {
                 properties.getMaxSteps(),
                 now
         );
-        return repository.create(run, json(Map.of(
+        AgentRun created = repository.create(run, json(Map.of(
                 "traceId", traceId,
                 "sessionId", sessionId,
                 "conversationId", conversationId
         )));
+        OwnedConversationId identity = OwnedConversationId.decodeOrLegacy(conversationId);
+        messageRepository.saveRunMessage(
+                owner.key(), identity.externalId(), created.runId(),
+                "USER", userMessage, tokenCounter.count(userMessage),
+                "USER", "RUN_USER");
+        return created;
     }
 
     public AgentRunClaim claim(String runId, String workerId) {
@@ -113,6 +143,7 @@ public class AgentRuntimeService {
         return persisted;
     }
 
+    @Transactional
     public AgentRun complete(String runId, String workerId, long leaseEpoch, String answer) {
         Instant now = clock.instant();
         AgentRun current = requireRun(runId);
@@ -121,6 +152,11 @@ public class AgentRuntimeService {
         if (persisted == null) {
             throw new IllegalStateException("agent run changed concurrently or worker lease was lost");
         }
+        OwnedConversationId identity = OwnedConversationId.decodeOrLegacy(persisted.conversationId());
+        messageRepository.saveRunMessage(
+                persisted.ownerKey(), identity.externalId(), persisted.runId(),
+                "ASSISTANT", answer, tokenCounter.count(answer),
+                "ASSISTANT", "RUN_ASSISTANT");
         return persisted;
     }
 

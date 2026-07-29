@@ -106,9 +106,11 @@ class AgentConsoleControllerTest {
                 .andReturn();
 
         String body = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
-        assertThat(body).contains("event: started");
-        assertThat(body).contains("event: token");
-        assertThat(body).contains("event: final");
+        assertThat(body).contains("event:started");
+        assertThat(body).contains("event:token");
+        assertThat(body).contains("event:final");
+        assertThat(body).doesNotContain("data:event:");
+        assertThat(body).doesNotContain("data:id:");
         assertThat(body).contains("\"traceId\"");
         assertThat(body).contains("AAPL quote summary");
 
@@ -123,8 +125,8 @@ class AgentConsoleControllerTest {
                 .andReturn()
                 .getResponse()
                 .getContentAsString(StandardCharsets.UTF_8);
-        assertThat(replay).doesNotContain("event: created");
-        assertThat(replay).contains("event: started", "event: token", "event: final");
+        assertThat(replay).doesNotContain("event:created");
+        assertThat(replay).contains("event:started", "event:token", "event:final");
 
         mockMvc.perform(get("/api/agent/runs/{runId}", runId.group(1)))
                 .andExpect(status().isOk())

@@ -21,7 +21,8 @@ import java.util.function.Function;
 @EnableConfigurationProperties({
         ToolSecurityProperties.class,
         TavilyProperties.class,
-        RagProperties.class
+        RagProperties.class,
+        MarketDataProperties.class
 })
 public class ToolRegistryConfig {
 
@@ -29,17 +30,27 @@ public class ToolRegistryConfig {
     private final WorkspaceFileTool fileTool;
     private final CommandExecuteTool commandTool;
     private final HttpRequestTool httpTool;
+    private final StockQuoteTool stockQuoteTool;
     private final WebSearchTool searchTool;
     private final KnowledgeSearchTool knowledgeSearchTool;
+    private final KnowledgeSearchAgentTool knowledgeSearchAgentTool;
     private final AgentToolRegistry agentToolRegistry;
 
     @Autowired
     public ToolRegistryConfig(
             TavilyProperties tavilyProperties,
             RagProperties ragProperties,
-            ToolSecurityProperties securityProperties
+            ToolSecurityProperties securityProperties,
+            MarketDataProperties marketDataProperties,
+            ObjectMapper objectMapper
     ) {
-        this(tavilyProperties.apiKey(), ragProperties.indexFile(), securityProperties);
+        this(
+                tavilyProperties.apiKey(),
+                ragProperties.indexFile(),
+                securityProperties,
+                marketDataProperties,
+                objectMapper
+        );
     }
 
     public ToolRegistryConfig(
@@ -54,19 +65,39 @@ public class ToolRegistryConfig {
             Path ragIndexFile,
             ToolSecurityProperties securityProperties
     ) {
+        this(
+                tavilyApiKey,
+                ragIndexFile,
+                securityProperties,
+                new MarketDataProperties(),
+                new ObjectMapper()
+        );
+    }
+
+    ToolRegistryConfig(
+            String tavilyApiKey,
+            Path ragIndexFile,
+            ToolSecurityProperties securityProperties,
+            MarketDataProperties marketDataProperties,
+            ObjectMapper objectMapper
+    ) {
         ToolPermissionService permissionService = new ToolPermissionService(securityProperties);
         this.executionSupport = new ToolExecutionSupport();
         this.fileTool = new WorkspaceFileTool(permissionService);
         this.commandTool = new CommandExecuteTool(permissionService);
         this.httpTool = new HttpRequestTool(permissionService);
+        this.stockQuoteTool = new StockQuoteTool(marketDataProperties, objectMapper);
         this.searchTool = new WebSearchTool(tavilyApiKey);
+        this.knowledgeSearchTool = new KnowledgeSearchTool(new LocalKnowledgeBase(ragIndexFile));
+        this.knowledgeSearchAgentTool = new KnowledgeSearchAgentTool(knowledgeSearchTool);
         this.agentToolRegistry = new AgentToolRegistry(List.of(
                 fileTool,
                 commandTool,
                 httpTool,
-                searchTool
+                stockQuoteTool,
+                searchTool,
+                knowledgeSearchAgentTool
         ));
-        this.knowledgeSearchTool = new KnowledgeSearchTool(new LocalKnowledgeBase(ragIndexFile));
     }
 
     @Bean
@@ -162,6 +193,23 @@ public class ToolRegistryConfig {
         return request -> executionSupport.execute("httpRequestTool",
                 () -> httpTool.execute(new com.hkdzagent.agent.tool.WebRequest(request.url())),
                 "network request failed");
+    }
+
+    public record StockRequest(
+            @JsonProperty(required = true, value = "symbol")
+            @JsonPropertyDescription("Ticker symbol such as AAPL, TSLA, IBM, or 0700.HK.")
+            String symbol
+    ) {
+    }
+
+    @Bean
+    @Description("Query a structured stock quote from the configured market-data provider.")
+    public Function<StockRequest, String> stockQuoteTool() {
+        return request -> executionSupport.execute(
+                "stockQuoteTool",
+                () -> stockQuoteTool.execute(new StockQuoteRequest(request.symbol())),
+                "stock quote failed"
+        );
     }
 
     public record SearchRequest(

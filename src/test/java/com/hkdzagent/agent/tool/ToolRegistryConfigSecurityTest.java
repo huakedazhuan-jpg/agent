@@ -142,6 +142,61 @@ class ToolRegistryConfigSecurityTest {
         }
     }
 
+    @Test
+    void httpRequestToolReportsNonSuccessStatusInsteadOfReturningErrorPageAsSuccess() throws Exception {
+        ToolRegistryConfig config = secureConfig(
+                securityProperties(tempDir, List.of(), List.of("localhost")));
+        Function<ToolRegistryConfig.WebRequest, String> tool = config.httpRequestTool();
+
+        try (TestHttpServer server = startServer(exchange ->
+                writeBody(exchange, 429, "text/html", "<html>rate limited</html>"))) {
+            String result = tool.apply(new ToolRegistryConfig.WebRequest(server.uri("/quote").toString()));
+
+            assertThat(result).contains("http request failed", "status=429", "content-type=text/html");
+            assertThat(result).contains("rate limited");
+        }
+    }
+
+    @Test
+    void httpRequestToolFollowsAllowedRedirect() throws Exception {
+        ToolRegistryConfig config = secureConfig(
+                securityProperties(tempDir, List.of(), List.of("localhost")));
+        Function<ToolRegistryConfig.WebRequest, String> tool = config.httpRequestTool();
+
+        try (TestHttpServer server = startServer(exchange -> {
+            if ("/redirect".equals(exchange.getRequestURI().getPath())) {
+                exchange.getResponseHeaders().add("Location", "/quote");
+                exchange.sendResponseHeaders(302, -1);
+                exchange.close();
+                return;
+            }
+            writeBody(exchange, "quote-data");
+        })) {
+            String result = tool.apply(
+                    new ToolRegistryConfig.WebRequest(server.uri("/redirect").toString()));
+
+            assertThat(result).isEqualTo("quote-data");
+        }
+    }
+
+    @Test
+    void httpRequestToolRejectsRedirectToDomainOutsideAllowList() throws Exception {
+        ToolRegistryConfig config = secureConfig(
+                securityProperties(tempDir, List.of(), List.of("localhost")));
+        Function<ToolRegistryConfig.WebRequest, String> tool = config.httpRequestTool();
+
+        try (TestHttpServer server = startServer(exchange -> {
+            exchange.getResponseHeaders().add("Location", "https://blocked.example.test/quote");
+            exchange.sendResponseHeaders(302, -1);
+            exchange.close();
+        })) {
+            String result = tool.apply(
+                    new ToolRegistryConfig.WebRequest(server.uri("/redirect").toString()));
+
+            assertRejected(result);
+        }
+    }
+
     private static ToolRegistryConfig secureConfig(ToolSecurityProperties securityProperties) {
         try {
             Constructor<ToolRegistryConfig> constructor = ToolRegistryConfig.class
@@ -192,8 +247,18 @@ class ToolRegistryConfigSecurityTest {
     }
 
     private static void writeBody(HttpExchange exchange, String body) throws IOException {
+        writeBody(exchange, 200, "text/plain; charset=utf-8", body);
+    }
+
+    private static void writeBody(
+            HttpExchange exchange,
+            int status,
+            String contentType,
+            String body
+    ) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
-        exchange.sendResponseHeaders(200, bytes.length);
+        exchange.getResponseHeaders().set("Content-Type", contentType);
+        exchange.sendResponseHeaders(status, bytes.length);
         try (OutputStream responseBody = exchange.getResponseBody()) {
             responseBody.write(bytes);
         }

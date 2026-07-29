@@ -74,6 +74,18 @@ public class LLMClient {
         return kimiToolCallingClient.runWithTools(userMessage, conversationId, traceId, observer);
     }
 
+    public AgentLoopResult runWithTools(
+            String userMessage,
+            String conversationId,
+            String ownerKey,
+            String runId,
+            String traceId,
+            AgentExecutionObserver observer
+    ) {
+        return kimiToolCallingClient.runWithTools(
+                userMessage, conversationId, ownerKey, runId, traceId, observer);
+    }
+
     public AgentLoopResult resumeWithApprovedTool(
             String checkpointJson,
             AgentObservation approvedObservation,

@@ -90,7 +90,7 @@ class KimiToolCallingClientTest {
             assertThat(firstRequest.path("thinking").path("type").asText()).isEqualTo("enabled");
             assertThat(toolNames(firstRequest))
                     .containsExactlyInAnyOrder("fileOperationTool", "commandExecuteTool", "httpRequestTool",
-                            "knowledgeSearchTool");
+                            "stockQuoteTool", "webSearchTool", "knowledgeSearchTool");
 
             JsonNode secondRequest = readRequest(requestBodies, 1);
             JsonNode assistantToolCallMessage = firstAssistantToolCallMessage(secondRequest);

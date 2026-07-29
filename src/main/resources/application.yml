@@ -61,7 +61,26 @@ feishu:
 
 tavily:
   api-key: ${TAVILY_API_KEY}
+
+market-data:
+  twelve-data:
+    api-key: ${TWELVE_DATA_API_KEY:demo}
+    base-url: ${TWELVE_DATA_BASE_URL:https://api.twelvedata.com/quote}
+    connect-timeout: ${TWELVE_DATA_CONNECT_TIMEOUT:10s}
+    read-timeout: ${TWELVE_DATA_READ_TIMEOUT:20s}
+
 agent:
+  context:
+    max-input-tokens: ${AGENT_CONTEXT_MAX_INPUT_TOKENS:12000}
+    max-current-user-tokens: ${AGENT_CONTEXT_MAX_CURRENT_USER_TOKENS:4000}
+    system-tokens: ${AGENT_CONTEXT_SYSTEM_TOKENS:1500}
+    long-term-memory-tokens: ${AGENT_CONTEXT_LONG_TERM_MEMORY_TOKENS:2000}
+    summary-tokens: ${AGENT_CONTEXT_SUMMARY_TOKENS:1200}
+    recent-message-tokens: ${AGENT_CONTEXT_RECENT_MESSAGE_TOKENS:3500}
+    tool-observation-tokens: ${AGENT_CONTEXT_TOOL_OBSERVATION_TOKENS:1800}
+    reserved-protocol-tokens: ${AGENT_CONTEXT_RESERVED_PROTOCOL_TOKENS:2000}
+  memory-processing:
+    poll-interval: ${AGENT_MEMORY_PROCESSING_POLL_INTERVAL:5s}
   audit:
     repository: ${AGENT_AUDIT_REPOSITORY:memory}
   runtime:

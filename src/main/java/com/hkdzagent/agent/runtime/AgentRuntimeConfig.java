@@ -18,6 +18,10 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.ObjectProvider;
+import com.hkdzagent.agent.memory.ConversationMessageRepository;
+import com.hkdzagent.agent.context.TokenCounter;
+import com.hkdzagent.agent.memory.MemoryProcessingJobRepository;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
@@ -48,9 +52,14 @@ public class AgentRuntimeConfig {
     public AgentRuntimeService agentRuntimeService(
             AgentRunRepository repository,
             AgentRuntimeProperties properties,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            ObjectProvider<ConversationMessageRepository> messages,
+            TokenCounter tokenCounter
     ) {
-        return new AgentRuntimeService(repository, properties, objectMapper, Clock.systemUTC());
+        return new AgentRuntimeService(
+                repository, properties, objectMapper, Clock.systemUTC(),
+                messages.getIfAvailable(() -> ConversationMessageRepository.NOOP),
+                tokenCounter);
     }
 
     @Bean
@@ -206,9 +215,12 @@ public class AgentRuntimeConfig {
     @Bean
     public AgentCompletionService agentCompletionService(
             AgentRuntimeService runtimeService,
-            FeishuResultOutboxService outboxService
+            FeishuResultOutboxService outboxService,
+            ObjectProvider<MemoryProcessingJobRepository> memoryJobs
     ) {
-        return new AgentCompletionService(runtimeService, outboxService);
+        return new AgentCompletionService(
+                runtimeService, outboxService,
+                memoryJobs.getIfAvailable(() -> MemoryProcessingJobRepository.NOOP));
     }
 
     @Bean

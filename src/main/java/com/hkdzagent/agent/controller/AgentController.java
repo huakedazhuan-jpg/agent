@@ -36,6 +36,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -110,7 +111,10 @@ public class AgentController {
     }
 
     @PostMapping(value = "/api/agent/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<String> chatStream(@RequestBody ChatRequest request, Authentication authentication) {
+    public Flux<ServerSentEvent<String>> chatStream(
+            @RequestBody ChatRequest request,
+            Authentication authentication
+    ) {
         String traceId = UUID.randomUUID().toString();
         ActorIdentity owner = actorResolver.resolve(authentication);
         String sessionId = normalizeSessionId(request.sessionId());
@@ -120,7 +124,7 @@ public class AgentController {
         AgentRun run = runtimeService.create(owner, sessionId, conversationId, traceId, message);
         AgentRunEvent created = runtimeService.replayEvents(run.runId(), 0).get(0);
 
-        return Flux.<String>create(sink -> {
+        return Flux.<ServerSentEvent<String>>create(sink -> {
             sink.next(sse(created));
             String workerId = "stream-" + UUID.randomUUID();
             Schedulers.boundedElastic().schedule(() -> {
@@ -135,7 +139,7 @@ public class AgentController {
     }
 
     @GetMapping(value = "/api/agent/runs/{runId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public ResponseEntity<Flux<String>> replayRunEvents(
+    public ResponseEntity<Flux<ServerSentEvent<String>>> replayRunEvents(
             @PathVariable String runId,
             @RequestParam(defaultValue = "0") long after,
             Authentication authentication
@@ -144,7 +148,8 @@ public class AgentController {
         if (runtimeService.findOwned(runId, owner) == null) {
             return ResponseEntity.notFound().build();
         }
-        Flux<String> events = Flux.fromIterable(runtimeService.replayEvents(runId, Math.max(0, after)))
+        Flux<ServerSentEvent<String>> events =
+                Flux.fromIterable(runtimeService.replayEvents(runId, Math.max(0, after)))
                 .map(this::sse);
         return ResponseEntity.ok(events);
     }
@@ -300,15 +305,17 @@ public class AgentController {
         this.cancellationService = cancellationService;
     }
 
-    private String sse(AgentRunEvent event) {
+    private ServerSentEvent<String> sse(AgentRunEvent event) {
         LinkedHashMap<String, Object> envelope = new LinkedHashMap<>();
         envelope.put("runId", event.runId());
         envelope.put("sequence", event.sequence());
         envelope.put("type", event.type().name());
         envelope.put("payload", readPayload(event.payloadJson()));
-        return "id: " + event.sequence() + "\n"
-                + "event: " + eventName(event.type()) + "\n"
-                + "data: " + writeJson(envelope) + "\n\n";
+        return ServerSentEvent.<String>builder()
+                .id(Long.toString(event.sequence()))
+                .event(eventName(event.type()))
+                .data(writeJson(envelope))
+                .build();
     }
 
     private JsonNode readPayload(String payloadJson) {

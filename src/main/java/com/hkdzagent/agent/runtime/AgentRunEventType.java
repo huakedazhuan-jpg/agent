@@ -3,6 +3,7 @@ package com.hkdzagent.agent.runtime;
 public enum AgentRunEventType {
     RUN_CREATED,
     RUN_STARTED,
+    CONTEXT_ASSEMBLED,
     MODEL_STARTED,
     TOKEN_DELTA,
     MODEL_COMPLETED,

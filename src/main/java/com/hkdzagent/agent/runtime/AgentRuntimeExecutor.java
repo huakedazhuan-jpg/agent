@@ -362,6 +362,29 @@ public class AgentRuntimeExecutor {
         }
 
         @Override
+        public String contextOwnerKey() {
+            return run.ownerKey();
+        }
+
+        @Override
+        public String contextRunId() {
+            return run.runId();
+        }
+
+        @Override
+        public void contextAssembled(
+                int step, com.hkdzagent.agent.context.ContextEnvelope envelope
+        ) {
+            Map<String, Object> tokens = new HashMap<>();
+            envelope.sectionTokens().forEach((kind, count) ->
+                    tokens.put(kind.name(), count));
+            tokens.put("total", envelope.totalTokens());
+            tokens.put("changes", envelope.changes().size());
+            traceRecorder.recordModelRequest(run.traceId(), step, tokens);
+            emitWorker(run, workerId, AgentRunEventType.CONTEXT_ASSEMBLED, tokens, consumer);
+        }
+
+        @Override
         public void modelStarted(int step) {
             assertExecutionActive(run, workerId, heartbeat);
             runtimeService.checkpoint(

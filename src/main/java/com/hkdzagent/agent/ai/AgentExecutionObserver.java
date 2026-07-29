@@ -1,6 +1,7 @@
 package com.hkdzagent.agent.ai;
 
 import com.hkdzagent.agent.loop.AgentObservation;
+import com.hkdzagent.agent.context.ContextEnvelope;
 
 public interface AgentExecutionObserver {
 
@@ -8,6 +9,17 @@ public interface AgentExecutionObserver {
     };
 
     default void modelStarted(int step) {
+    }
+
+    default void contextAssembled(int step, ContextEnvelope envelope) {
+    }
+
+    default String contextOwnerKey() {
+        return null;
+    }
+
+    default String contextRunId() {
+        return null;
     }
 
     default void tokenDelta(int step, String delta) {

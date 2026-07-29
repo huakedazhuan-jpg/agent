@@ -13,12 +13,19 @@ import com.hkdzagent.agent.loop.AgentObservation;
 import com.hkdzagent.agent.loop.AgentPlan;
 import com.hkdzagent.agent.loop.AgentToolCall;
 import com.hkdzagent.agent.loop.AgentTurn;
+import com.hkdzagent.agent.context.ConservativeTokenCounter;
+import com.hkdzagent.agent.context.ContextAssembler;
+import com.hkdzagent.agent.context.ContextBudget;
+import com.hkdzagent.agent.context.ContextEnvelope;
+import com.hkdzagent.agent.context.ContextRequest;
+import com.hkdzagent.agent.context.ContextSection;
+import com.hkdzagent.agent.context.DefaultContextSource;
+import com.hkdzagent.agent.memory.InMemoryMemoryRepository;
+import com.hkdzagent.agent.memory.MemoryRetriever;
+import com.hkdzagent.agent.memory.MemorySanitizer;
+import com.hkdzagent.agent.memory.OwnedConversationId;
 import com.hkdzagent.agent.tool.ToolRegistryConfig;
 import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.MessageType;
-import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
@@ -33,6 +40,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -47,14 +55,19 @@ public class KimiToolCallingClient {
 
     private static final String SYSTEM_PROMPT = """
             你是一个股票信息查询 agent，负责帮助用户查询股票、ETF、指数和上市公司公开信息。
-            优先使用 HTTP 工具查询公开行情数据，常用数据源包括 Yahoo Finance、Stooq 和常规搜索网站。
-            可使用 query1.finance.yahoo.com、query2.finance.yahoo.com 查询行情摘要或图表数据，可使用 stooq.com 查询补充行情。
+            查询股票最新价格、开高低收、成交量或涨跌幅时，必须优先使用 stockQuoteTool，并且只传股票代码。
+            如果 stockQuoteTool 返回失败、无权限或缺少数据，使用 webSearchTool 搜索公开网页作为兜底，不要反复调用相同失败的行情代码。
+            使用 webSearchTool 时必须在查询词中加入当前年份。网页搜索结果不得冒充实时行情；只有结果明确包含数据日期时才能报告价格。
+            回答必须逐项注明网页来源和数据日期；来源冲突或日期不明确时，应明确说无法确认当前价格，不得自行拼接或推测。
+            不要使用 httpRequestTool 猜测 Yahoo Finance、Stooq 或其他行情接口 URL。
+            只有 stockQuoteTool 明确无法覆盖、且用户需要普通公开网页内容时，才可以使用其他查询工具。
             回答时要注明数据来源和查询时间，说明行情数据可能延迟或缺失。
             只做信息查询、整理和解释，不提供投资建议，不承诺收益，不替用户做买卖决策。
             """;
 
     private final ObjectMapper objectMapper;
-    private final ChatMemory chatMemory;
+    private final ContextAssembler contextAssembler;
+    private final ChatMemory legacyChatMemory;
     private final String apiKey;
     private final URI completionsUri;
     private final String model;
@@ -66,23 +79,29 @@ public class KimiToolCallingClient {
     private final Function<ToolRegistryConfig.FileRequest, String> fileOperationTool;
     private final Function<ToolRegistryConfig.CommandRequest, String> commandExecuteTool;
     private final Function<ToolRegistryConfig.WebRequest, String> httpRequestTool;
+    private final Function<ToolRegistryConfig.StockRequest, String> stockQuoteTool;
+    private final Function<ToolRegistryConfig.SearchRequest, String> webSearchTool;
     private final Function<ToolRegistryConfig.KnowledgeRequest, String> knowledgeSearchTool;
 
     @Autowired
     public KimiToolCallingClient(
             ObjectMapper objectMapper,
             ChatMemory chatMemory,
+            ContextAssembler contextAssembler,
             OpenAiCompatibleProperties modelProperties,
             KimiProperties kimiProperties,
             @Qualifier("fileOperationTool") Function<ToolRegistryConfig.FileRequest, String> fileOperationTool,
             @Qualifier("commandExecuteTool") Function<ToolRegistryConfig.CommandRequest, String> commandExecuteTool,
             @Qualifier("httpRequestTool") Function<ToolRegistryConfig.WebRequest, String> httpRequestTool,
+            @Qualifier("stockQuoteTool") Function<ToolRegistryConfig.StockRequest, String> stockQuoteTool,
+            @Qualifier("webSearchTool") Function<ToolRegistryConfig.SearchRequest, String> webSearchTool,
             @Qualifier("knowledgeSearchTool") Function<ToolRegistryConfig.KnowledgeRequest, String> knowledgeSearchTool
     ) {
-        this(objectMapper, chatMemory, modelProperties.apiKey(), modelProperties.completionsUri(),
+        this(objectMapper, contextAssembler, null, modelProperties.apiKey(), modelProperties.completionsUri(),
                 modelProperties.model(), modelProperties.temperature(), modelProperties.maxTokens(),
                 kimiProperties.requestTimeout(), kimiProperties.maxToolRounds(), kimiProperties.historyLimit(),
-                fileOperationTool, commandExecuteTool, httpRequestTool, knowledgeSearchTool);
+                fileOperationTool, commandExecuteTool, httpRequestTool, stockQuoteTool, webSearchTool,
+                knowledgeSearchTool);
     }
 
     public KimiToolCallingClient(
@@ -100,8 +119,9 @@ public class KimiToolCallingClient {
             @Qualifier("httpRequestTool") Function<ToolRegistryConfig.WebRequest, String> httpRequestTool,
             @Qualifier("knowledgeSearchTool") Function<ToolRegistryConfig.KnowledgeRequest, String> knowledgeSearchTool
     ) {
-        this(objectMapper, chatMemory, apiKey, completionsUri(baseUrl), model, temperature, maxTokens, requestTimeout,
-                maxToolRounds, 20, fileOperationTool, commandExecuteTool, httpRequestTool, knowledgeSearchTool);
+        this(objectMapper, legacyContextAssembler(chatMemory), chatMemory, apiKey, completionsUri(baseUrl), model, temperature, maxTokens, requestTimeout,
+                maxToolRounds, 20, fileOperationTool, commandExecuteTool, httpRequestTool,
+                unavailableStockQuoteTool(), unavailableWebSearchTool(), knowledgeSearchTool);
     }
 
     public KimiToolCallingClient(
@@ -118,14 +138,17 @@ public class KimiToolCallingClient {
             @Qualifier("commandExecuteTool") Function<ToolRegistryConfig.CommandRequest, String> commandExecuteTool,
             @Qualifier("httpRequestTool") Function<ToolRegistryConfig.WebRequest, String> httpRequestTool
     ) {
-        this(objectMapper, chatMemory, apiKey, completionsUri(baseUrl), model, temperature, maxTokens, requestTimeout,
+        this(objectMapper, legacyContextAssembler(chatMemory), chatMemory, apiKey, completionsUri(baseUrl), model, temperature, maxTokens, requestTimeout,
                 maxToolRounds, 20, fileOperationTool, commandExecuteTool, httpRequestTool,
+                unavailableStockQuoteTool(),
+                unavailableWebSearchTool(),
                 request -> "knowledge search unavailable: no local RAG knowledge base is configured");
     }
 
     private KimiToolCallingClient(
             ObjectMapper objectMapper,
-            ChatMemory chatMemory,
+            ContextAssembler contextAssembler,
+            ChatMemory legacyChatMemory,
             String apiKey,
             URI completionsUri,
             String model,
@@ -137,10 +160,13 @@ public class KimiToolCallingClient {
             Function<ToolRegistryConfig.FileRequest, String> fileOperationTool,
             Function<ToolRegistryConfig.CommandRequest, String> commandExecuteTool,
             Function<ToolRegistryConfig.WebRequest, String> httpRequestTool,
+            Function<ToolRegistryConfig.StockRequest, String> stockQuoteTool,
+            Function<ToolRegistryConfig.SearchRequest, String> webSearchTool,
             Function<ToolRegistryConfig.KnowledgeRequest, String> knowledgeSearchTool
     ) {
         this.objectMapper = objectMapper;
-        this.chatMemory = chatMemory;
+        this.contextAssembler = contextAssembler;
+        this.legacyChatMemory = legacyChatMemory;
         this.apiKey = apiKey;
         this.completionsUri = completionsUri;
         this.model = model;
@@ -152,6 +178,8 @@ public class KimiToolCallingClient {
         this.fileOperationTool = fileOperationTool;
         this.commandExecuteTool = commandExecuteTool;
         this.httpRequestTool = httpRequestTool;
+        this.stockQuoteTool = stockQuoteTool;
+        this.webSearchTool = webSearchTool;
         this.knowledgeSearchTool = knowledgeSearchTool;
     }
 
@@ -175,8 +203,33 @@ public class KimiToolCallingClient {
             AgentExecutionObserver observer
     ) {
         String conversationId = normalizeSessionId(sessionId);
-        List<ObjectNode> messages = requestMessages(conversationId, userMessage);
+        OwnedConversationId identity = OwnedConversationId.decodeOrLegacy(conversationId);
+        String ownerKey = observer == null || observer.contextOwnerKey() == null
+                ? identity.owner().key()
+                : observer.contextOwnerKey();
+        String runId = observer == null || observer.contextRunId() == null
+                ? traceId
+                : observer.contextRunId();
+        return runWithTools(
+                userMessage, conversationId, ownerKey, runId, traceId, observer);
+    }
+
+    public AgentLoopResult runWithTools(
+            String userMessage,
+            String conversationId,
+            String ownerKey,
+            String runId,
+            String traceId,
+            AgentExecutionObserver observer
+    ) {
+        ContextRequest request = new ContextRequest(
+                ownerKey, normalizeSessionId(conversationId), runId,
+                SYSTEM_PROMPT + "\n当前日期：" + LocalDate.now() + "。",
+                userMessage, List.of());
+        ContextEnvelope envelope = contextAssembler.assemble(request);
+        List<ObjectNode> messages = envelopeMessages(envelope);
         AgentExecutionObserver safeObserver = observer == null ? AgentExecutionObserver.NOOP : observer;
+        safeObserver.contextAssembled(0, envelope);
         AgentLoopService agentLoopService = agentLoopService(messages, userMessage, conversationId, safeObserver);
         return agentLoopService.run(new AgentLoopRequest(userMessage, conversationId, traceId));
     }
@@ -211,6 +264,7 @@ public class KimiToolCallingClient {
                     approvedObservation.success(), approvedObservation.content());
             messages.add(assistantMessageForNextRequest(assistantMessage));
             messages.add(toolResultMessage(toolCall, approvedObservation.content()));
+            enforceProtocolBudget(messages);
 
             AgentLoopService loop = agentLoopService(
                     messages, userMessage, conversationId, safeObserver);
@@ -270,6 +324,7 @@ public class KimiToolCallingClient {
     ) {
         appendObservationMessages(messages, pendingAssistantMessage, pendingToolCall, addedObservationCount,
                 turn.observations());
+        enforceProtocolBudget(messages);
 
         observer.modelStarted(turn.step());
         JsonNode assistantMessage = callModel(messages, observer, turn.step());
@@ -277,7 +332,11 @@ public class KimiToolCallingClient {
         JsonNode toolCalls = assistantMessage.path("tool_calls");
         if (!toolCalls.isArray() || toolCalls.isEmpty()) {
             String answer = assistantMessage.path("content").asText("");
-            chatMemory.add(conversationId, List.of(new UserMessage(userMessage), new AssistantMessage(answer)));
+            if (legacyChatMemory != null) {
+                legacyChatMemory.add(conversationId, List.of(
+                        new org.springframework.ai.chat.messages.UserMessage(userMessage),
+                        new org.springframework.ai.chat.messages.AssistantMessage(answer)));
+            }
             return AgentDecision.finalAnswer(answer);
         }
 
@@ -362,35 +421,75 @@ public class KimiToolCallingClient {
                 && !normalized.contains("unknown tool");
     }
 
-    private List<ObjectNode> requestMessages(String conversationId, String userMessage) {
+    private List<ObjectNode> envelopeMessages(ContextEnvelope envelope) {
         List<ObjectNode> messages = new ArrayList<>();
-        messages.add(message("system", SYSTEM_PROMPT));
-
-        for (Message message : lastMessages(chatMemory.get(conversationId), historyLimit)) {
-            ObjectNode historyMessage = historyMessage(message);
-            if (historyMessage != null) {
-                messages.add(historyMessage);
-            }
+        for (ContextSection section : envelope.messages()) {
+            messages.add(message(section.role(), section.content()));
         }
 
-        messages.add(message("user", userMessage));
         return messages;
     }
 
-    private ObjectNode historyMessage(Message message) {
-        if (message.getMessageType() == MessageType.USER) {
-            return message("user", message.getText());
+    private void enforceProtocolBudget(List<ObjectNode> messages) {
+        int toolLimit = contextAssembler.toolObservationTokenLimit();
+        for (ObjectNode candidate : messages) {
+            if ("tool".equals(candidate.path("role").asText())) {
+                String content = candidate.path("content").asText("");
+                if (contextAssembler.countTokens(content) > toolLimit) {
+                    candidate.put("content", truncateToolResult(content, toolLimit));
+                }
+            }
         }
-        if (message.getMessageType() == MessageType.ASSISTANT) {
-            return message("assistant", message.getText());
+        while (protocolTokens(messages) > contextAssembler.usableTokenLimit()) {
+            int toolIndex = -1;
+            for (int i = 0; i < messages.size(); i++) {
+                if ("tool".equals(messages.get(i).path("role").asText())) {
+                    toolIndex = i;
+                    break;
+                }
+            }
+            if (toolIndex < 0) {
+                throw new com.hkdzagent.agent.context.ContextLimitExceededException(
+                        "model protocol messages exceed the input budget");
+            }
+            String toolCallId = messages.get(toolIndex).path("tool_call_id").asText();
+            messages.remove(toolIndex);
+            for (int i = 0; i < messages.size(); i++) {
+                JsonNode calls = messages.get(i).path("tool_calls");
+                boolean match = false;
+                if (calls.isArray()) {
+                    for (JsonNode call : calls) {
+                        match |= toolCallId.equals(call.path("id").asText());
+                    }
+                }
+                if (match) {
+                    messages.remove(i);
+                    break;
+                }
+            }
         }
-        return null;
     }
 
-    private List<Message> lastMessages(List<Message> messages, int limit) {
-        int safeLimit = Math.max(0, limit);
-        int fromIndex = Math.max(0, messages.size() - safeLimit);
-        return messages.subList(fromIndex, messages.size());
+    private int protocolTokens(List<ObjectNode> messages) {
+        return messages.stream()
+                .mapToInt(value -> contextAssembler.countTokens(value.toString()))
+                .sum();
+    }
+
+    private String truncateToolResult(String content, int limit) {
+        String suffix = "\n[工具结果已按上下文预算压缩]";
+        int target = Math.max(0, limit - contextAssembler.countTokens(suffix));
+        int low = 0;
+        int high = content.length();
+        while (low < high) {
+            int middle = (low + high + 1) >>> 1;
+            if (contextAssembler.countTokens(content.substring(0, middle)) <= target) {
+                low = middle;
+            } else {
+                high = middle - 1;
+            }
+        }
+        return content.substring(0, low) + suffix;
     }
 
     private JsonNode callModel(
@@ -591,6 +690,10 @@ public class KimiToolCallingClient {
                         commandExecuteTool.apply(objectMapper.readValue(arguments, ToolRegistryConfig.CommandRequest.class));
                 case "httpRequestTool" ->
                         httpRequestTool.apply(objectMapper.readValue(arguments, ToolRegistryConfig.WebRequest.class));
+                case "stockQuoteTool" ->
+                        stockQuoteTool.apply(objectMapper.readValue(arguments, ToolRegistryConfig.StockRequest.class));
+                case "webSearchTool" ->
+                        webSearchTool.apply(objectMapper.readValue(arguments, ToolRegistryConfig.SearchRequest.class));
                 case "knowledgeSearchTool" ->
                         knowledgeSearchTool.apply(objectMapper.readValue(arguments, ToolRegistryConfig.KnowledgeRequest.class));
                 default -> "unknown tool: " + toolName;
@@ -622,9 +725,27 @@ public class KimiToolCallingClient {
                 requiredParameters("command", "Allowed local command to execute.")));
         tools.add(toolDefinition("httpRequestTool", "Send an HTTP GET request only to configured domains.",
                 requiredParameters("url", "HTTP or HTTPS URL to request.")));
+        tools.add(toolDefinition(
+                "stockQuoteTool",
+                "Query a structured stock quote. Prefer this over guessing finance website URLs.",
+                requiredParameters("symbol", "Ticker symbol such as AAPL, TSLA, IBM, or 0700.HK.")
+        ));
+        tools.add(toolDefinition(
+                "webSearchTool",
+                "Search public websites. Use this as the fallback when stockQuoteTool fails or lacks data; include source and data time in the final answer.",
+                requiredParameters("query", "Precise public-web search query, including ticker symbol and requested market data.")
+        ));
         tools.add(toolDefinition("knowledgeSearchTool", "Search the local RAG knowledge base and return chunks with source references.",
                 requiredParameters("query", "Question or search query for the local RAG knowledge base.")));
         return tools;
+    }
+
+    private static Function<ToolRegistryConfig.StockRequest, String> unavailableStockQuoteTool() {
+        return request -> "stock quote unavailable: no market-data provider is configured";
+    }
+
+    private static Function<ToolRegistryConfig.SearchRequest, String> unavailableWebSearchTool() {
+        return request -> "web search unavailable: no public-web search provider is configured";
     }
 
     private ObjectNode toolDefinition(String name, String description, ObjectNode parameters) {
@@ -659,6 +780,16 @@ public class KimiToolCallingClient {
         parameters.set("properties", properties);
         parameters.set("required", required);
         return parameters;
+    }
+
+    private static ContextAssembler legacyContextAssembler(ChatMemory chatMemory) {
+        MemorySanitizer sanitizer = new MemorySanitizer();
+        return new ContextAssembler(
+                new DefaultContextSource(
+                        chatMemory, null, null,
+                        new MemoryRetriever(new InMemoryMemoryRepository(), sanitizer)),
+                new ConservativeTokenCounter(),
+                new ContextBudget());
     }
 
     private static URI completionsUri(String baseUrl) {

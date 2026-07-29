@@ -50,8 +50,17 @@ class ToolMetadataTest {
                 "commandExecuteTool", ToolRiskLevel.CRITICAL, ToolApprovalPolicy.ALWAYS);
         assertMetadata(new HttpRequestTool(permissions).metadata(),
                 "httpRequestTool", ToolRiskLevel.MEDIUM, ToolApprovalPolicy.CONDITIONAL);
+        assertMetadata(new StockQuoteTool(
+                        new MarketDataProperties(),
+                        new com.fasterxml.jackson.databind.ObjectMapper()).metadata(),
+                "stockQuoteTool", ToolRiskLevel.LOW, ToolApprovalPolicy.NEVER);
         assertMetadata(new WebSearchTool("test-key").metadata(),
                 "webSearchTool", ToolRiskLevel.LOW, ToolApprovalPolicy.NEVER);
+        assertMetadata(new KnowledgeSearchAgentTool(
+                        new com.hkdzagent.agent.rag.KnowledgeSearchTool(
+                                new com.hkdzagent.agent.rag.LocalKnowledgeBase(
+                                        java.nio.file.Path.of("data/rag-index.json")))).metadata(),
+                "knowledgeSearchTool", ToolRiskLevel.LOW, ToolApprovalPolicy.NEVER);
     }
 
     private void assertMetadata(

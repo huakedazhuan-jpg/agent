@@ -29,7 +29,9 @@ class ToolPipelineSpringWiringTest {
                 "fileOperationTool",
                 "commandExecuteTool",
                 "httpRequestTool",
-                "webSearchTool"
+                "stockQuoteTool",
+                "webSearchTool",
+                "knowledgeSearchTool"
         );
         assertThat(validator).isNotNull();
         assertThat(policyEngine).isNotNull();
