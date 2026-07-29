@@ -4,13 +4,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -38,6 +35,8 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
                     trace_id,
                     run_id,
                     tool_name,
+                    tool_version,
+                    tool_call_id,
                     request_hash,
                     request_payload,
                     arguments_preview,
@@ -53,6 +52,8 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
                     :traceId,
                     :runId,
                     :toolName,
+                    :toolVersion,
+                    :toolCallId,
                     :requestHash,
                     CAST(:requestPayload AS JSON),
                     :argumentsPreview,
@@ -64,7 +65,7 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
                 )
                 """,
                 parameters(confirmation)
-                        .addValue("requestHash", hash(confirmation.argumentsPreview()))
+                        .addValue("requestHash", confirmation.argumentsHash())
                         .addValue("requestPayload", writePayload(confirmation.argumentsPreview())));
         return confirmation;
     }
@@ -78,6 +79,9 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
                        trace_id,
                        CAST(run_id AS VARCHAR) AS run_id,
                        tool_name,
+                       tool_version,
+                       tool_call_id,
+                       request_hash,
                        arguments_preview,
                        status,
                        decision_reason,
@@ -105,6 +109,9 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
                        trace_id,
                        CAST(run_id AS VARCHAR) AS run_id,
                        tool_name,
+                       tool_version,
+                       tool_call_id,
+                       request_hash,
                        arguments_preview,
                        status,
                        decision_reason,
@@ -128,6 +135,9 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
                        trace_id,
                        CAST(run_id AS VARCHAR) AS run_id,
                        tool_name,
+                       tool_version,
+                       tool_call_id,
+                       request_hash,
                        arguments_preview,
                        status,
                        decision_reason,
@@ -153,8 +163,11 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
             String decisionReason,
             Instant decidedAt
     ) {
-        if (status == ToolConfirmation.Status.PENDING || status == ToolConfirmation.Status.EXPIRED) {
-            throw new IllegalArgumentException("decision status must be APPROVED or REJECTED");
+        if (status != ToolConfirmation.Status.APPROVED
+                && status != ToolConfirmation.Status.REJECTED
+                && status != ToolConfirmation.Status.CANCELLED) {
+            throw new IllegalArgumentException(
+                    "decision status must be APPROVED, REJECTED, or CANCELLED");
         }
         int updated = jdbcTemplate.update("""
                 UPDATE tool_approvals
@@ -194,6 +207,8 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
                 .addValue("traceId", confirmation.traceId())
                 .addValue("runId", nullableUuid(confirmation.runId()))
                 .addValue("toolName", confirmation.toolName())
+                .addValue("toolVersion", confirmation.toolVersion())
+                .addValue("toolCallId", confirmation.toolCallId())
                 .addValue("argumentsPreview", confirmation.argumentsPreview())
                 .addValue("status", confirmation.status().name())
                 .addValue("decisionReason", confirmation.decisionReason())
@@ -210,6 +225,9 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
                 rs.getString("trace_id"),
                 rs.getString("run_id"),
                 rs.getString("tool_name"),
+                rs.getString("tool_version"),
+                rs.getString("tool_call_id"),
+                rs.getString("request_hash"),
                 rs.getString("arguments_preview"),
                 ToolConfirmation.Status.valueOf(rs.getString("status")),
                 rs.getString("decision_reason"),
@@ -224,16 +242,6 @@ public class JdbcToolConfirmationRepository implements ToolConfirmationRepositor
             return objectMapper.writeValueAsString(Map.of("argumentsPreview", argumentsPreview));
         } catch (Exception e) {
             throw new IllegalStateException("failed to serialize tool approval payload", e);
-        }
-    }
-
-    private String hash(String value) {
-        try {
-            byte[] digest = MessageDigest.getInstance("SHA-256")
-                    .digest(value.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(digest);
-        } catch (Exception e) {
-            throw new IllegalStateException("failed to hash tool approval request", e);
         }
     }
 

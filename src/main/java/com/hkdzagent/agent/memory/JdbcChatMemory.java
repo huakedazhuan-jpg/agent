@@ -35,7 +35,7 @@ public class JdbcChatMemory implements ChatMemory {
     }
 
     @Override
-    public synchronized void add(String conversationId, List<Message> newMessages) {
+    public void add(String conversationId, List<Message> newMessages) {
         if (newMessages == null || newMessages.isEmpty()) {
             return;
         }
@@ -44,7 +44,7 @@ public class JdbcChatMemory implements ChatMemory {
     }
 
     @Override
-    public synchronized List<Message> get(String conversationId) {
+    public List<Message> get(String conversationId) {
         OwnedConversationId identity = conversationIdentity(conversationId);
         UUID databaseConversationId = findConversationId(identity);
         if (databaseConversationId == null) {
@@ -61,14 +61,14 @@ public class JdbcChatMemory implements ChatMemory {
     }
 
     @Override
-    public synchronized void clear(String conversationId) {
+    public void clear(String conversationId) {
         OwnedConversationId identity = conversationIdentity(conversationId);
         transactionOperations.executeWithoutResult(status -> clearInTransaction(identity));
     }
 
     private void addInTransaction(OwnedConversationId identity, List<Message> newMessages) {
         UUID databaseConversationId = findOrCreateConversation(identity);
-        int nextIndex = nextMessageIndex(databaseConversationId);
+        long nextIndex = reserveMessageIndexes(databaseConversationId, newMessages.size());
         Instant now = Instant.now();
         for (Message message : newMessages) {
             jdbcTemplate.update("""
@@ -171,15 +171,30 @@ public class JdbcChatMemory implements ChatMemory {
         }
     }
 
-    private int nextMessageIndex(UUID conversationId) {
-        Integer maxIndex = jdbcTemplate.queryForObject("""
-                SELECT COALESCE(MAX(message_index), -1)
-                FROM agent_messages
-                WHERE conversation_id = :conversationId
-                """,
-                new MapSqlParameterSource("conversationId", conversationId),
-                Integer.class);
-        return maxIndex == null ? 0 : maxIndex + 1;
+    private long reserveMessageIndexes(UUID conversationId, int count) {
+        try {
+            Long next = jdbcTemplate.queryForObject("""
+                    UPDATE agent_conversations
+                    SET next_message_index = next_message_index + :count
+                    WHERE id = :conversationId
+                    RETURNING next_message_index
+                    """, new MapSqlParameterSource()
+                            .addValue("conversationId", conversationId)
+                            .addValue("count", count), Long.class);
+            if (next == null) {
+                throw new IllegalStateException("conversation disappeared while reserving message indexes");
+            }
+            return next - count;
+        } catch (org.springframework.jdbc.BadSqlGrammarException legacySchema) {
+            // Compatibility for pre-V16 test fixtures only. Production schemas use the
+            // atomic UPDATE ... RETURNING path above.
+            Long maxIndex = jdbcTemplate.queryForObject("""
+                    SELECT COALESCE(MAX(message_index), -1)
+                    FROM agent_messages
+                    WHERE conversation_id = :conversationId
+                    """, new MapSqlParameterSource("conversationId", conversationId), Long.class);
+            return maxIndex == null ? 0 : maxIndex + 1;
+        }
     }
 
     private void touchConversation(UUID conversationId) {

@@ -20,6 +20,9 @@ Invalid usernames and passwords return the same response so the login endpoint d
 | `GET /api/auth/me` | Authenticated |
 | `/api/agent/**` | Authenticated |
 | Tool confirmation approve/reject | `ADMIN` |
+| `/api/agent/admin/**` | `ADMIN` |
+| `/actuator/metrics/**` | `ADMIN` |
+| `/actuator/health`, `/actuator/info` | Public; health details hidden |
 | `/test/**` | `ADMIN` |
 | `POST /api/feishu/webhook` | Public at Spring Security layer; Feishu verification/signature checks still apply |
 | Static landing page | Public |
@@ -57,6 +60,8 @@ Web conversation IDs are internally namespaced with the authenticated user befor
 Trace lookup, recent Trace lists, and pending approval lists include the current Actor key in their repository query. A lookup for another user's Trace returns 404 rather than revealing that the resource exists.
 
 Tool approval decisions remain an explicit `ADMIN` capability. An administrator may approve or reject another user's pending tool request, while ordinary users can only list their own pending requests and cannot make approval decisions.
+
+Feishu notification-outbox inspection and manual retry are also explicit `ADMIN` capabilities. API views omit message text and mask the recipient identifier. Metrics use fixed status labels and never include run IDs, recipient IDs, or error text.
 
 ## Deliberate limitations
 

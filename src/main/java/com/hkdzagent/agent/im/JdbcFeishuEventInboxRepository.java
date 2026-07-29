@@ -11,6 +11,7 @@ import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 public class JdbcFeishuEventInboxRepository implements FeishuEventInboxRepository {
 
@@ -40,7 +41,8 @@ public class JdbcFeishuEventInboxRepository implements FeishuEventInboxRepositor
                     processed_at,
                     next_attempt_at,
                     retry_count,
-                    last_error
+                    last_error,
+                    run_id
                 ) VALUES (
                     :eventId,
                     :eventType,
@@ -52,7 +54,8 @@ public class JdbcFeishuEventInboxRepository implements FeishuEventInboxRepositor
                     :processedAt,
                     :nextAttemptAt,
                     :retryCount,
-                    :lastError
+                    :lastError,
+                    :runId
                 )
                 """,
                 parameters(event));
@@ -93,8 +96,25 @@ public class JdbcFeishuEventInboxRepository implements FeishuEventInboxRepositor
     }
 
     @Override
-    public void markProcessed(String eventId, Instant processedAt) {
-        jdbcTemplate.update("""
+    public boolean bindRun(String eventId, int claimAttempt, String runId) {
+        int updated = jdbcTemplate.update("""
+                UPDATE feishu_event_inbox
+                SET run_id = :runId
+                WHERE event_id = :eventId
+                  AND status = 'PROCESSING'
+                  AND retry_count = :claimAttempt
+                  AND run_id IS NULL
+                """,
+                new MapSqlParameterSource()
+                        .addValue("eventId", eventId)
+                        .addValue("claimAttempt", claimAttempt)
+                        .addValue("runId", UUID.fromString(runId)));
+        return updated == 1;
+    }
+
+    @Override
+    public boolean markProcessed(String eventId, int claimAttempt, Instant processedAt) {
+        int updated = jdbcTemplate.update("""
                 UPDATE feishu_event_inbox
                 SET status = 'PROCESSED',
                     processed_at = :processedAt,
@@ -102,21 +122,25 @@ public class JdbcFeishuEventInboxRepository implements FeishuEventInboxRepositor
                     last_error = NULL
                 WHERE event_id = :eventId
                   AND status = 'PROCESSING'
+                  AND retry_count = :claimAttempt
                 """,
                 new MapSqlParameterSource()
                         .addValue("eventId", eventId)
+                        .addValue("claimAttempt", claimAttempt)
                         .addValue("processedAt", Timestamp.from(processedAt)));
+        return updated == 1;
     }
 
     @Override
-    public void markFailed(
+    public boolean markFailed(
             String eventId,
+            int claimAttempt,
             String error,
             Instant failedAt,
             Instant nextAttemptAt,
             boolean terminal
     ) {
-        jdbcTemplate.update("""
+        int updated = jdbcTemplate.update("""
                 UPDATE feishu_event_inbox
                 SET status = :status,
                     processed_at = CASE WHEN :terminal THEN :failedAt ELSE NULL END,
@@ -124,14 +148,17 @@ public class JdbcFeishuEventInboxRepository implements FeishuEventInboxRepositor
                     last_error = :lastError
                 WHERE event_id = :eventId
                   AND status = 'PROCESSING'
+                  AND retry_count = :claimAttempt
                 """,
                 new MapSqlParameterSource()
                         .addValue("eventId", eventId)
+                        .addValue("claimAttempt", claimAttempt)
                         .addValue("status", terminal ? "DEAD" : "RETRYABLE")
                         .addValue("terminal", terminal)
                         .addValue("failedAt", Timestamp.from(failedAt))
                         .addValue("nextAttemptAt", Timestamp.from(nextAttemptAt))
                         .addValue("lastError", error));
+        return updated == 1;
     }
 
     @Override
@@ -196,7 +223,8 @@ public class JdbcFeishuEventInboxRepository implements FeishuEventInboxRepositor
                        processed_at,
                        next_attempt_at,
                        retry_count,
-                       last_error
+                       last_error,
+                       CAST(run_id AS VARCHAR) AS run_id
                 FROM feishu_event_inbox
                 WHERE event_id = :eventId
                 """,
@@ -217,7 +245,8 @@ public class JdbcFeishuEventInboxRepository implements FeishuEventInboxRepositor
                 .addValue("processedAt", timestamp(event.processedAt()))
                 .addValue("nextAttemptAt", timestamp(event.nextAttemptAt()))
                 .addValue("retryCount", event.retryCount())
-                .addValue("lastError", event.lastError());
+                .addValue("lastError", event.lastError())
+                .addValue("runId", event.runId() == null ? null : UUID.fromString(event.runId()));
     }
 
     private FeishuInboxEvent mapEvent(ResultSet rs, int rowNum) throws SQLException {
@@ -232,7 +261,8 @@ public class JdbcFeishuEventInboxRepository implements FeishuEventInboxRepositor
                 instant(rs.getTimestamp("processed_at")),
                 instant(rs.getTimestamp("next_attempt_at")),
                 rs.getInt("retry_count"),
-                rs.getString("last_error")
+                rs.getString("last_error"),
+                rs.getString("run_id")
         );
     }
 

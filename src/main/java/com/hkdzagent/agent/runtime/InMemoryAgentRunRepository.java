@@ -3,9 +3,12 @@ package com.hkdzagent.agent.runtime;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.function.Supplier;
 
 public class InMemoryAgentRunRepository implements AgentRunRepository {
 
@@ -75,6 +78,95 @@ public class InMemoryAgentRunRepository implements AgentRunRepository {
     }
 
     @Override
+    public synchronized AgentRunClaim claimNextExpired(
+            String workerId,
+            Instant now,
+            Duration leaseDuration
+    ) {
+        Duration validLeaseDuration = requireLeaseDuration(leaseDuration);
+        AgentRun current = runs.values().stream()
+                .filter(run -> run.status() == AgentRunStatus.RUNNING)
+                .filter(run -> run.leaseExpiresAt() != null && !run.leaseExpiresAt().isAfter(now))
+                .min(Comparator.comparing(AgentRun::leaseExpiresAt)
+                        .thenComparing(AgentRun::createdAt)
+                        .thenComparing(AgentRun::runId))
+                .orElse(null);
+        if (current == null) {
+            return null;
+        }
+        AgentRun claimed = current.claim(workerId, now, now.plus(validLeaseDuration));
+        runs.put(claimed.runId(), claimed);
+        return new AgentRunClaim(claimed, false);
+    }
+
+    @Override
+    public synchronized AgentRunRecoveryEvidence findRecoveryEvidence(String runId) {
+        if (!runs.containsKey(runId)) {
+            return null;
+        }
+        List<AgentRunEvent> runEvents = events.getOrDefault(runId, List.of());
+        boolean toolStarted = runEvents.stream()
+                .anyMatch(event -> event.type() == AgentRunEventType.TOOL_STARTED);
+        int attempts = Math.toIntExact(runEvents.stream()
+                .filter(event -> event.type() == AgentRunEventType.RUN_RECOVERY_STARTED)
+                .count());
+        return new AgentRunRecoveryEvidence(toolStarted, attempts);
+    }
+
+    @Override
+    public synchronized AgentRun renewLease(
+            String runId,
+            String workerId,
+            long leaseEpoch,
+            Instant now,
+            Duration leaseDuration
+    ) {
+        AgentRun current = runs.get(runId);
+        if (current == null) {
+            return null;
+        }
+        AgentRun renewed;
+        try {
+            renewed = current.renewLease(
+                    workerId, leaseEpoch, now, now.plus(requireLeaseDuration(leaseDuration)));
+        } catch (IllegalStateException exception) {
+            return null;
+        }
+        runs.put(runId, renewed);
+        return renewed;
+    }
+
+    @Override
+    public synchronized <T> T executeWithActiveLease(
+            String runId,
+            String workerId,
+            long leaseEpoch,
+            Instant now,
+            Supplier<T> action
+    ) {
+        AgentRun current = runs.get(runId);
+        if (current == null || !current.holdsLease(workerId, leaseEpoch, now)) {
+            return null;
+        }
+        return action.get();
+    }
+
+    @Override
+    public synchronized <T> T executeWithWaitingApproval(
+            String runId,
+            String approvalId,
+            Supplier<T> action
+    ) {
+        AgentRun current = runs.get(runId);
+        if (current == null
+                || current.status() != AgentRunStatus.WAITING_APPROVAL
+                || !Objects.equals(approvalId, current.pendingApprovalId())) {
+            return null;
+        }
+        return action.get();
+    }
+
+    @Override
     public synchronized AgentRun update(AgentRun run, long expectedVersion, String requiredLeaseOwner) {
         AgentRun current = runs.get(run.runId());
         if (current == null || current.version() != expectedVersion || run.version() != expectedVersion + 1) {
@@ -104,6 +196,22 @@ public class InMemoryAgentRunRepository implements AgentRunRepository {
         events.computeIfAbsent(runId, ignored -> new ArrayList<>()).add(event);
         runs.put(runId, current.withEventSequence(sequence, createdAt));
         return event;
+    }
+
+    @Override
+    public synchronized AgentRunEvent appendWorkerEvent(
+            String runId,
+            String workerId,
+            long leaseEpoch,
+            AgentRunEventType type,
+            String payloadJson,
+            Instant createdAt
+    ) {
+        AgentRun current = runs.get(runId);
+        if (current == null || !current.holdsLease(workerId, leaseEpoch, createdAt)) {
+            return null;
+        }
+        return appendEvent(runId, type, payloadJson, createdAt);
     }
 
     @Override

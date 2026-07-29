@@ -23,6 +23,7 @@ public record AgentRun(
         String errorMessage,
         String leaseOwner,
         Instant leaseExpiresAt,
+        long leaseEpoch,
         Instant createdAt,
         Instant updatedAt,
         Instant completedAt
@@ -43,8 +44,8 @@ public record AgentRun(
         if (maxSteps < 1 || currentStep > maxSteps) {
             throw new IllegalArgumentException("run step bounds are invalid");
         }
-        if (version < 0 || lastEventSequence < 0) {
-            throw new IllegalArgumentException("run version and event sequence must not be negative");
+        if (version < 0 || lastEventSequence < 0 || leaseEpoch < 0) {
+            throw new IllegalArgumentException("run version, event sequence, and lease epoch must not be negative");
         }
         checkpointJson = checkpointJson == null || checkpointJson.isBlank() ? "{}" : checkpointJson;
         createdAt = createdAt == null ? Instant.now() : createdAt;
@@ -98,6 +99,7 @@ public record AgentRun(
                 null,
                 null,
                 null,
+                0,
                 now,
                 now,
                 null
@@ -130,23 +132,54 @@ public record AgentRun(
                 errorMessage,
                 workerId,
                 leaseExpiry,
+                leaseEpoch + 1,
                 now,
                 null
         );
     }
 
-    public AgentRun advance(int step, String checkpoint, String workerId, Instant now) {
-        return advance(step, checkpoint, workerId, now, leaseExpiresAt);
+    public boolean holdsLease(String workerId, long requiredLeaseEpoch, Instant now) {
+        return status == AgentRunStatus.RUNNING
+                && workerId != null
+                && workerId.equals(leaseOwner)
+                && requiredLeaseEpoch == leaseEpoch
+                && hasActiveLease(now);
+    }
+
+    public AgentRun renewLease(
+            String workerId,
+            long requiredLeaseEpoch,
+            Instant now,
+            Instant renewedLeaseExpiry
+    ) {
+        if (!holdsLease(workerId, requiredLeaseEpoch, now)) {
+            throw new IllegalStateException("worker does not hold the current run lease fence");
+        }
+        if (renewedLeaseExpiry == null || !renewedLeaseExpiry.isAfter(now)) {
+            throw new IllegalArgumentException("renewed lease expiry must be after heartbeat time");
+        }
+        return copy(
+                status, currentStep, version + 1, lastEventSequence,
+                checkpointJson, pendingApprovalId, finalAnswer, errorMessage,
+                leaseOwner, renewedLeaseExpiry, now, null
+        );
+    }
+
+    public AgentRun advance(
+            int step, String checkpoint, String workerId, long requiredLeaseEpoch, Instant now
+    ) {
+        return advance(step, checkpoint, workerId, requiredLeaseEpoch, now, leaseExpiresAt);
     }
 
     public AgentRun advance(
             int step,
             String checkpoint,
             String workerId,
+            long requiredLeaseEpoch,
             Instant now,
             Instant renewedLeaseExpiry
     ) {
-        requireWorkerLease(workerId, now);
+        requireWorkerLease(workerId, requiredLeaseEpoch, now);
         if (step < currentStep || step > maxSteps) {
             throw new IllegalArgumentException("runtime step cannot move backwards or exceed maxSteps");
         }
@@ -169,8 +202,8 @@ public record AgentRun(
         );
     }
 
-    public AgentRun complete(String answer, String workerId, Instant now) {
-        requireWorkerLease(workerId, now);
+    public AgentRun complete(String answer, String workerId, long requiredLeaseEpoch, Instant now) {
+        requireWorkerLease(workerId, requiredLeaseEpoch, now);
         return copy(
                 AgentRunStatus.COMPLETED,
                 currentStep,
@@ -191,9 +224,10 @@ public record AgentRun(
             String approvalId,
             String checkpoint,
             String workerId,
+            long requiredLeaseEpoch,
             Instant now
     ) {
-        requireWorkerLease(workerId, now);
+        requireWorkerLease(workerId, requiredLeaseEpoch, now);
         requireUuid(approvalId, "approvalId");
         return copy(
                 AgentRunStatus.WAITING_APPROVAL, currentStep, version + 1, lastEventSequence,
@@ -218,7 +252,8 @@ public record AgentRun(
         }
         return copy(
                 AgentRunStatus.RUNNING, currentStep, version + 1, lastEventSequence,
-                checkpointJson, null, null, null, workerId, leaseExpiry, now, null
+                checkpointJson, null, null, null, workerId, leaseExpiry,
+                leaseEpoch + 1, now, null
         );
     }
 
@@ -236,10 +271,8 @@ public record AgentRun(
         );
     }
 
-    public AgentRun fail(String error, String workerId, Instant now) {
-        if (status != AgentRunStatus.RUNNING || workerId == null || !workerId.equals(leaseOwner)) {
-            throw new IllegalStateException("worker does not own the running run");
-        }
+    public AgentRun fail(String error, String workerId, long requiredLeaseEpoch, Instant now) {
+        requireWorkerLease(workerId, requiredLeaseEpoch, now);
         return copy(
                 AgentRunStatus.FAILED,
                 currentStep,
@@ -249,6 +282,26 @@ public record AgentRun(
                 null,
                 null,
                 error == null ? "agent execution failed" : error,
+                null,
+                null,
+                now,
+                now
+        );
+    }
+
+    public AgentRun cancel(Instant now) {
+        if (!status.canTransitionTo(AgentRunStatus.CANCELLED)) {
+            throw new IllegalStateException("run cannot be cancelled from status " + status);
+        }
+        return copy(
+                AgentRunStatus.CANCELLED,
+                currentStep,
+                version + 1,
+                lastEventSequence,
+                checkpointJson,
+                null,
+                null,
+                null,
                 null,
                 null,
                 now,
@@ -296,12 +349,9 @@ public record AgentRun(
         );
     }
 
-    private void requireWorkerLease(String workerId, Instant now) {
-        if (status != AgentRunStatus.RUNNING) {
-            throw new IllegalStateException("run is not running");
-        }
-        if (workerId == null || !workerId.equals(leaseOwner) || !hasActiveLease(now)) {
-            throw new IllegalStateException("worker does not hold an active run lease");
+    private void requireWorkerLease(String workerId, long requiredLeaseEpoch, Instant now) {
+        if (!holdsLease(workerId, requiredLeaseEpoch, now)) {
+            throw new AgentRunLeaseLostException("worker does not hold the current run lease fence");
         }
     }
 
@@ -316,6 +366,28 @@ public record AgentRun(
             String nextErrorMessage,
             String nextLeaseOwner,
             Instant nextLeaseExpiresAt,
+            Instant nextUpdatedAt,
+            Instant nextCompletedAt
+    ) {
+        return copy(
+                nextStatus, nextStep, nextVersion, nextEventSequence, nextCheckpoint,
+                nextPendingApprovalId, nextFinalAnswer, nextErrorMessage,
+                nextLeaseOwner, nextLeaseExpiresAt, leaseEpoch, nextUpdatedAt, nextCompletedAt
+        );
+    }
+
+    private AgentRun copy(
+            AgentRunStatus nextStatus,
+            int nextStep,
+            long nextVersion,
+            long nextEventSequence,
+            String nextCheckpoint,
+            String nextPendingApprovalId,
+            String nextFinalAnswer,
+            String nextErrorMessage,
+            String nextLeaseOwner,
+            Instant nextLeaseExpiresAt,
+            long nextLeaseEpoch,
             Instant nextUpdatedAt,
             Instant nextCompletedAt
     ) {
@@ -337,6 +409,7 @@ public record AgentRun(
                 nextErrorMessage,
                 nextLeaseOwner,
                 nextLeaseExpiresAt,
+                nextLeaseEpoch,
                 createdAt,
                 nextUpdatedAt,
                 nextCompletedAt

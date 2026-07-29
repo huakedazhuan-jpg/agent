@@ -18,8 +18,13 @@ import com.hkdzagent.agent.runtime.AgentRunEventType;
 import com.hkdzagent.agent.runtime.AgentRuntimeExecutor;
 import com.hkdzagent.agent.runtime.AgentRuntimeProperties;
 import com.hkdzagent.agent.runtime.AgentRuntimeService;
+import com.hkdzagent.agent.runtime.AgentRunCoordinator;
+import com.hkdzagent.agent.runtime.AgentRunStatus;
 import com.hkdzagent.agent.runtime.AgentApprovalOrchestrator;
 import com.hkdzagent.agent.runtime.AgentApprovalPauseService;
+import com.hkdzagent.agent.runtime.AgentApprovalConflictException;
+import com.hkdzagent.agent.runtime.AgentCancellationService;
+import com.hkdzagent.agent.runtime.AgentRunCancellation;
 import com.hkdzagent.agent.runtime.InMemoryAgentRunRepository;
 import com.hkdzagent.agent.trace.AgentTrace;
 import com.hkdzagent.agent.trace.AgentTraceEvent;
@@ -29,9 +34,12 @@ import com.hkdzagent.agent.trace.AgentTraceSanitizer;
 import com.hkdzagent.agent.trace.InMemoryAgentTraceRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -58,7 +66,9 @@ public class AgentController {
     private ToolConfirmationService confirmationService = new ToolConfirmationService(fallbackSanitizer);
     private AgentRuntimeService runtimeService;
     private AgentRuntimeExecutor runtimeExecutor;
+    private AgentRunCoordinator runCoordinator;
     private AgentApprovalOrchestrator approvalOrchestrator;
+    private AgentCancellationService cancellationService;
 
     public AgentController(LLMClient llmClient) {
         this.llmClient = llmClient;
@@ -72,18 +82,39 @@ public class AgentController {
                 runtimeService, llmClient, traceRecorder, fallbackSanitizer,
                 new AgentApprovalPauseService(confirmationService, runtimeService, fallbackSanitizer),
                 new ToolConfirmationProperties());
+        this.runCoordinator = new AgentRunCoordinator(
+                runtimeService, runtimeExecutor, traceRecorder);
     }
 
     @PostMapping("/api/agent/chat")
-    public ChatResponse chat(@RequestBody ChatRequest request, Authentication authentication) {
+    public ResponseEntity<?> chat(
+            @RequestBody ChatRequest request,
+            Authentication authentication
+    ) {
         ActorIdentity owner = actorResolver.resolve(authentication);
         String sessionId = normalizeSessionId(request.sessionId());
-        String answer = llmClient.askWithTools(request.message(), ownedConversationId(owner, sessionId));
-        return new ChatResponse(answer);
+        AgentRun run = runCoordinator.execute(
+                owner,
+                sessionId,
+                ownedConversationId(owner, sessionId),
+                request.message(),
+                "http-chat"
+        );
+        if (run.status() == AgentRunStatus.COMPLETED) {
+            return ResponseEntity.ok(new ChatResponse(run.finalAnswer()));
+        }
+        AgentRunSubmissionResponse response = AgentRunSubmissionResponse.from(run);
+        if (run.status() == AgentRunStatus.WAITING_APPROVAL) {
+            return ResponseEntity.accepted().body(response);
+        }
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(response);
     }
 
     @PostMapping(value = "/api/agent/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<String> chatStream(@RequestBody ChatRequest request, Authentication authentication) {
+    public Flux<ServerSentEvent<String>> chatStream(
+            @RequestBody ChatRequest request,
+            Authentication authentication
+    ) {
         String traceId = UUID.randomUUID().toString();
         ActorIdentity owner = actorResolver.resolve(authentication);
         String sessionId = normalizeSessionId(request.sessionId());
@@ -93,7 +124,7 @@ public class AgentController {
         AgentRun run = runtimeService.create(owner, sessionId, conversationId, traceId, message);
         AgentRunEvent created = runtimeService.replayEvents(run.runId(), 0).get(0);
 
-        return Flux.<String>create(sink -> {
+        return Flux.<ServerSentEvent<String>>create(sink -> {
             sink.next(sse(created));
             String workerId = "stream-" + UUID.randomUUID();
             Schedulers.boundedElastic().schedule(() -> {
@@ -108,7 +139,7 @@ public class AgentController {
     }
 
     @GetMapping(value = "/api/agent/runs/{runId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public ResponseEntity<Flux<String>> replayRunEvents(
+    public ResponseEntity<Flux<ServerSentEvent<String>>> replayRunEvents(
             @PathVariable String runId,
             @RequestParam(defaultValue = "0") long after,
             Authentication authentication
@@ -117,7 +148,8 @@ public class AgentController {
         if (runtimeService.findOwned(runId, owner) == null) {
             return ResponseEntity.notFound().build();
         }
-        Flux<String> events = Flux.fromIterable(runtimeService.replayEvents(runId, Math.max(0, after)))
+        Flux<ServerSentEvent<String>> events =
+                Flux.fromIterable(runtimeService.replayEvents(runId, Math.max(0, after)))
                 .map(this::sse);
         return ResponseEntity.ok(events);
     }
@@ -143,6 +175,27 @@ public class AgentController {
         return runtimeService.findRecent(owner, Math.max(1, Math.min(limit, 50))).stream()
                 .map(AgentRunView::from)
                 .toList();
+    }
+
+    @PostMapping("/api/agent/runs/{runId}/cancel")
+    public ResponseEntity<?> cancelRun(
+            @PathVariable String runId,
+            @RequestBody(required = false) Map<String, String> body,
+            Authentication authentication
+    ) {
+        if (cancellationService == null) {
+            throw new IllegalStateException("agent cancellation service is not configured");
+        }
+        ActorIdentity owner = actorResolver.resolve(authentication);
+        String reason = body == null ? null : body.get("reason");
+        AgentRunCancellation result = cancellationService.cancel(owner, runId, reason);
+        return switch (result.outcome()) {
+            case CANCELLED, ALREADY_CANCELLED -> ResponseEntity.ok(
+                    AgentRunCancellationResponse.from(result));
+            case NOT_FOUND -> ResponseEntity.notFound().build();
+            case TERMINAL_CONFLICT, CONCURRENT_CONFLICT -> ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(AgentRunCancellationResponse.from(result));
+        };
     }
 
     @GetMapping("/api/agent/traces/{traceId}")
@@ -194,6 +247,14 @@ public class AgentController {
                 : approvalOrchestrator.reject(confirmationId, reason);
     }
 
+    @ExceptionHandler(AgentApprovalConflictException.class)
+    public ResponseEntity<Map<String, String>> approvalConflict(
+            AgentApprovalConflictException exception
+    ) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(Map.of("error", exception.getMessage()));
+    }
+
     @Autowired(required = false)
     void setObjectMapper(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
@@ -230,19 +291,31 @@ public class AgentController {
     }
 
     @Autowired(required = false)
+    void setRunCoordinator(AgentRunCoordinator runCoordinator) {
+        this.runCoordinator = runCoordinator;
+    }
+
+    @Autowired(required = false)
     void setApprovalOrchestrator(AgentApprovalOrchestrator approvalOrchestrator) {
         this.approvalOrchestrator = approvalOrchestrator;
     }
 
-    private String sse(AgentRunEvent event) {
+    @Autowired(required = false)
+    void setCancellationService(AgentCancellationService cancellationService) {
+        this.cancellationService = cancellationService;
+    }
+
+    private ServerSentEvent<String> sse(AgentRunEvent event) {
         LinkedHashMap<String, Object> envelope = new LinkedHashMap<>();
         envelope.put("runId", event.runId());
         envelope.put("sequence", event.sequence());
         envelope.put("type", event.type().name());
         envelope.put("payload", readPayload(event.payloadJson()));
-        return "id: " + event.sequence() + "\n"
-                + "event: " + eventName(event.type()) + "\n"
-                + "data: " + writeJson(envelope) + "\n\n";
+        return ServerSentEvent.<String>builder()
+                .id(Long.toString(event.sequence()))
+                .event(eventName(event.type()))
+                .data(writeJson(envelope))
+                .build();
     }
 
     private JsonNode readPayload(String payloadJson) {
@@ -260,6 +333,7 @@ public class AgentController {
             case TOKEN_DELTA -> "token";
             case RUN_COMPLETED -> "final";
             case RUN_FAILED -> "error";
+            case RUN_CANCELLED -> "cancelled";
             default -> type.name().toLowerCase().replace('_', '-');
         };
     }
@@ -328,6 +402,34 @@ public class AgentController {
                     run.pendingApprovalId(), run.finalAnswer(), run.errorMessage(),
                     run.createdAt(), run.updatedAt(), run.completedAt()
             );
+        }
+    }
+
+    private record AgentRunSubmissionResponse(
+            String runId,
+            String traceId,
+            String status,
+            String pendingApprovalId,
+            String errorMessage
+    ) {
+        private static AgentRunSubmissionResponse from(AgentRun run) {
+            return new AgentRunSubmissionResponse(
+                    run.runId(), run.traceId(), run.status().name(),
+                    run.pendingApprovalId(), run.errorMessage());
+        }
+    }
+
+    private record AgentRunCancellationResponse(
+            String runId,
+            String status,
+            boolean newlyCancelled
+    ) {
+        private static AgentRunCancellationResponse from(AgentRunCancellation cancellation) {
+            AgentRun run = cancellation.run();
+            return new AgentRunCancellationResponse(
+                    run == null ? null : run.runId(),
+                    run == null ? null : run.status().name(),
+                    cancellation.newlyCancelled());
         }
     }
 }

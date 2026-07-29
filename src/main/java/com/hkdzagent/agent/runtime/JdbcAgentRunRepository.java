@@ -11,7 +11,9 @@ import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 public class JdbcAgentRunRepository implements AgentRunRepository {
 
@@ -35,12 +37,14 @@ public class JdbcAgentRunRepository implements AgentRunRepository {
                         id, owner_key, session_id, conversation_id, trace_id, user_message,
                         status, current_step, max_steps, version, last_event_sequence,
                         checkpoint, pending_approval_id, final_answer, error_message,
-                        lease_owner, lease_expires_at, created_at, updated_at, completed_at
+                        lease_owner, lease_expires_at, lease_epoch,
+                        created_at, updated_at, completed_at
                     ) VALUES (
                         :id, :ownerKey, :sessionId, :conversationId, :traceId, :userMessage,
                         :status, :currentStep, :maxSteps, :version, :lastEventSequence,
                         CAST(:checkpoint AS JSON), :pendingApprovalId, :finalAnswer, :errorMessage,
-                        :leaseOwner, :leaseExpiresAt, :createdAt, :updatedAt, :completedAt
+                        :leaseOwner, :leaseExpiresAt, :leaseEpoch,
+                        :createdAt, :updatedAt, :completedAt
                     )
                     """, parameters(persisted));
             insertEvent(new AgentRunEvent(
@@ -113,6 +117,124 @@ public class JdbcAgentRunRepository implements AgentRunRepository {
     }
 
     @Override
+    public AgentRunClaim claimNextExpired(
+            String workerId,
+            Instant now,
+            Duration leaseDuration
+    ) {
+        requireLeaseDuration(leaseDuration);
+        return transactions.execute(status -> {
+            List<String> runIds = jdbcTemplate.queryForList("""
+                    SELECT CAST(id AS VARCHAR)
+                    FROM agent_runs
+                    WHERE status = 'RUNNING'
+                      AND lease_expires_at IS NOT NULL
+                      AND lease_expires_at <= :now
+                    ORDER BY lease_expires_at ASC, created_at ASC, id ASC
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                    """,
+                    new MapSqlParameterSource("now", timestamp(now)),
+                    String.class);
+            if (runIds.isEmpty()) {
+                return null;
+            }
+            String runId = runIds.get(0);
+            AgentRun current = findById(runId);
+            if (current == null) {
+                return null;
+            }
+            AgentRun claimed = current.claim(workerId, now, now.plus(leaseDuration));
+            if (updateRow(claimed, current.version(), current.leaseOwner()) != 1) {
+                return null;
+            }
+            return new AgentRunClaim(findById(runId), false);
+        });
+    }
+
+    @Override
+    public AgentRunRecoveryEvidence findRecoveryEvidence(String runId) {
+        if (findById(runId) == null) {
+            return null;
+        }
+        return jdbcTemplate.queryForObject("""
+                SELECT
+                    COALESCE(SUM(CASE WHEN event_type = 'TOOL_STARTED' THEN 1 ELSE 0 END), 0)
+                        AS tool_started_count,
+                    COALESCE(SUM(CASE WHEN event_type = 'RUN_RECOVERY_STARTED' THEN 1 ELSE 0 END), 0)
+                        AS recovery_attempts
+                FROM agent_run_events
+                WHERE run_id = :runId
+                """,
+                new MapSqlParameterSource("runId", uuid(runId)),
+                (rs, rowNum) -> new AgentRunRecoveryEvidence(
+                        rs.getLong("tool_started_count") > 0,
+                        Math.toIntExact(rs.getLong("recovery_attempts"))));
+    }
+
+    @Override
+    public AgentRun renewLease(
+            String runId,
+            String workerId,
+            long leaseEpoch,
+            Instant now,
+            Duration leaseDuration
+    ) {
+        requireLeaseDuration(leaseDuration);
+        return transactions.execute(status -> {
+            AgentRun current = findForUpdate(runId);
+            if (current == null) {
+                return null;
+            }
+            AgentRun renewed;
+            try {
+                renewed = current.renewLease(
+                        workerId, leaseEpoch, now, now.plus(leaseDuration));
+            } catch (IllegalStateException exception) {
+                return null;
+            }
+            if (updateRow(renewed, current.version(), workerId) != 1) {
+                return null;
+            }
+            return findById(runId);
+        });
+    }
+
+    @Override
+    public <T> T executeWithActiveLease(
+            String runId,
+            String workerId,
+            long leaseEpoch,
+            Instant now,
+            Supplier<T> action
+    ) {
+        return transactions.execute(status -> {
+            AgentRun current = findForUpdate(runId);
+            if (current == null || !current.holdsLease(workerId, leaseEpoch, now)) {
+                return null;
+            }
+            return action.get();
+        });
+    }
+
+    @Override
+    public <T> T executeWithWaitingApproval(
+            String runId,
+            String approvalId,
+            Supplier<T> action
+    ) {
+        return transactions.execute(status -> {
+            AgentRun current = findForUpdate(runId);
+            if (current == null
+                    || current.status() != AgentRunStatus.WAITING_APPROVAL
+                    || !Objects.equals(approvalId, current.pendingApprovalId())) {
+                return null;
+            }
+            return action.get();
+        });
+    }
+
+    @Override
     public AgentRun update(AgentRun run, long expectedVersion, String requiredLeaseOwner) {
         if (run.version() != expectedVersion + 1) {
             throw new IllegalArgumentException("updated run version must increment exactly once");
@@ -133,31 +255,25 @@ public class JdbcAgentRunRepository implements AgentRunRepository {
             if (current == null) {
                 return null;
             }
-            AgentRun next = current.withEventSequence(current.lastEventSequence() + 1, createdAt);
-            int updated = jdbcTemplate.update("""
-                    UPDATE agent_runs
-                    SET last_event_sequence = :lastEventSequence,
-                        updated_at = :updatedAt
-                    WHERE id = :id
-                      AND last_event_sequence = :expectedSequence
-                    """,
-                    new MapSqlParameterSource()
-                            .addValue("id", uuid(runId))
-                            .addValue("lastEventSequence", next.lastEventSequence())
-                            .addValue("expectedSequence", current.lastEventSequence())
-                            .addValue("updatedAt", timestamp(next.updatedAt())));
-            if (updated != 1) {
-                throw new IllegalStateException("failed to reserve next event sequence for run " + runId);
+            return appendLockedEvent(current, type, payloadJson, createdAt);
+        });
+    }
+
+    @Override
+    public AgentRunEvent appendWorkerEvent(
+            String runId,
+            String workerId,
+            long leaseEpoch,
+            AgentRunEventType type,
+            String payloadJson,
+            Instant createdAt
+    ) {
+        return transactions.execute(status -> {
+            AgentRun current = findForUpdate(runId);
+            if (current == null || !current.holdsLease(workerId, leaseEpoch, createdAt)) {
+                return null;
             }
-            AgentRunEvent event = new AgentRunEvent(
-                    runId,
-                    next.lastEventSequence(),
-                    type,
-                    payloadJson,
-                    createdAt
-            );
-            insertEvent(event);
-            return event;
+            return appendLockedEvent(current, type, payloadJson, createdAt);
         });
     }
 
@@ -186,6 +302,35 @@ public class JdbcAgentRunRepository implements AgentRunRepository {
         return find("WHERE id = :id FOR UPDATE", new MapSqlParameterSource("id", uuid(runId)));
     }
 
+    private AgentRunEvent appendLockedEvent(
+            AgentRun current,
+            AgentRunEventType type,
+            String payloadJson,
+            Instant createdAt
+    ) {
+        AgentRun next = current.withEventSequence(current.lastEventSequence() + 1, createdAt);
+        int updated = jdbcTemplate.update("""
+                UPDATE agent_runs
+                SET last_event_sequence = :lastEventSequence,
+                    updated_at = :updatedAt
+                WHERE id = :id
+                  AND last_event_sequence = :expectedSequence
+                """,
+                new MapSqlParameterSource()
+                        .addValue("id", uuid(current.runId()))
+                        .addValue("lastEventSequence", next.lastEventSequence())
+                        .addValue("expectedSequence", current.lastEventSequence())
+                        .addValue("updatedAt", timestamp(next.updatedAt())));
+        if (updated != 1) {
+            throw new IllegalStateException(
+                    "failed to reserve next event sequence for run " + current.runId());
+        }
+        AgentRunEvent event = new AgentRunEvent(
+                current.runId(), next.lastEventSequence(), type, payloadJson, createdAt);
+        insertEvent(event);
+        return event;
+    }
+
     private AgentRun find(String whereClause, MapSqlParameterSource parameters) {
         try {
             return jdbcTemplate.queryForObject("""
@@ -206,6 +351,7 @@ public class JdbcAgentRunRepository implements AgentRunRepository {
                            error_message,
                            lease_owner,
                            lease_expires_at,
+                           lease_epoch,
                            created_at,
                            updated_at,
                            completed_at
@@ -235,6 +381,7 @@ public class JdbcAgentRunRepository implements AgentRunRepository {
                     error_message = :errorMessage,
                     lease_owner = :leaseOwner,
                     lease_expires_at = :leaseExpiresAt,
+                    lease_epoch = :leaseEpoch,
                     updated_at = :updatedAt,
                     completed_at = :completedAt
                 WHERE id = :id
@@ -276,6 +423,7 @@ public class JdbcAgentRunRepository implements AgentRunRepository {
                 rs.getString("error_message"),
                 rs.getString("lease_owner"),
                 instant(rs.getTimestamp("lease_expires_at")),
+                rs.getLong("lease_epoch"),
                 rs.getTimestamp("created_at").toInstant(),
                 rs.getTimestamp("updated_at").toInstant(),
                 instant(rs.getTimestamp("completed_at"))
@@ -311,6 +459,7 @@ public class JdbcAgentRunRepository implements AgentRunRepository {
                 .addValue("errorMessage", run.errorMessage())
                 .addValue("leaseOwner", run.leaseOwner())
                 .addValue("leaseExpiresAt", timestamp(run.leaseExpiresAt()))
+                .addValue("leaseEpoch", run.leaseEpoch())
                 .addValue("createdAt", timestamp(run.createdAt()))
                 .addValue("updatedAt", timestamp(run.updatedAt()))
                 .addValue("completedAt", timestamp(run.completedAt()));

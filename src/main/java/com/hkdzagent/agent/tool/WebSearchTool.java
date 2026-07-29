@@ -3,9 +3,20 @@ package com.hkdzagent.agent.tool;
 import org.springframework.http.MediaType;
 import org.springframework.web.client.RestClient;
 
+import java.time.Duration;
 import java.util.Map;
 
-public class WebSearchTool {
+public class WebSearchTool implements AgentTool<SearchRequest, ToolResult> {
+
+    private static final ToolMetadata METADATA = new ToolMetadata(
+            "webSearchTool",
+            "1.0.0",
+            "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"],\"additionalProperties\":false}",
+            ToolRiskLevel.LOW,
+            ToolApprovalPolicy.NEVER,
+            Duration.ofSeconds(10),
+            ToolRetryPolicy.fixed(2, Duration.ofMillis(200))
+    );
 
     private final String tavilyApiKey;
     private final RestClient restClient;
@@ -19,6 +30,17 @@ public class WebSearchTool {
         this.restClient = restClient;
     }
 
+    @Override
+    public ToolMetadata metadata() {
+        return METADATA;
+    }
+
+    @Override
+    public Class<SearchRequest> inputType() {
+        return SearchRequest.class;
+    }
+
+    @Override
     public ToolResult execute(SearchRequest request) {
         try {
             Map<String, Object> jsonBody = Map.of(

@@ -10,6 +10,7 @@ import com.hkdzagent.agent.im.FeishuProperties;
 import com.hkdzagent.agent.rag.RagProperties;
 import com.hkdzagent.agent.security.AgentSecurityProperties;
 import com.hkdzagent.agent.tool.TavilyProperties;
+import com.hkdzagent.agent.tool.MarketDataProperties;
 import com.hkdzagent.agent.trace.AgentTraceProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
@@ -80,6 +81,10 @@ class ApplicationPropertiesBindingTest {
                 .withProperty("agent.security.bootstrap.password", "strong-password")
                 .withProperty("agent.security.bootstrap.role", "ADMIN")
                 .withProperty("tavily.api-key", "tavily-api-key")
+                .withProperty("market-data.twelve-data.api-key", "market-api-key")
+                .withProperty("market-data.twelve-data.base-url", "https://market.example.test/quote")
+                .withProperty("market-data.twelve-data.connect-timeout", "4s")
+                .withProperty("market-data.twelve-data.read-timeout", "9s")
                 .withProperty("feishu.app-id", "feishu-app-id")
                 .withProperty("feishu.app-secret", "feishu-app-secret")
                 .withProperty("feishu.verification-token", "feishu-token")
@@ -92,7 +97,13 @@ class ApplicationPropertiesBindingTest {
                 .withProperty("feishu.inbox.retry-delay", "45s")
                 .withProperty("feishu.inbox.processing-timeout", "10m")
                 .withProperty("feishu.inbox.poll-interval", "20s")
-                .withProperty("feishu.inbox.poll-batch-size", "50");
+                .withProperty("feishu.inbox.poll-batch-size", "50")
+                .withProperty("feishu.outbox.repository", "jdbc")
+                .withProperty("feishu.outbox.max-attempts", "7")
+                .withProperty("feishu.outbox.retry-delay", "1m")
+                .withProperty("feishu.outbox.processing-timeout", "12m")
+                .withProperty("feishu.outbox.poll-interval", "8s")
+                .withProperty("feishu.outbox.poll-batch-size", "60");
 
         ChatMemoryProperties memory = bind(environment, "agent.memory", ChatMemoryProperties.class);
         RagProperties rag = bind(environment, "agent.rag", RagProperties.class);
@@ -106,6 +117,8 @@ class ApplicationPropertiesBindingTest {
                 environment, "agent.runtime", AgentRuntimeProperties.class);
         AgentSecurityProperties security = bind(environment, "agent.security", AgentSecurityProperties.class);
         TavilyProperties tavily = bind(environment, "tavily", TavilyProperties.class);
+        MarketDataProperties marketData = bind(
+                environment, "market-data.twelve-data", MarketDataProperties.class);
         FeishuProperties feishu = bind(environment, "feishu", FeishuProperties.class);
 
         assertThat(memory.file()).isEqualTo(Path.of("data/test-memory.jsonl"));
@@ -129,6 +142,10 @@ class ApplicationPropertiesBindingTest {
         assertThat(security.bootstrap().password()).isEqualTo("strong-password");
         assertThat(security.bootstrap().role()).isEqualTo("ADMIN");
         assertThat(tavily.apiKey()).isEqualTo("tavily-api-key");
+        assertThat(marketData.apiKey()).isEqualTo("market-api-key");
+        assertThat(marketData.baseUrl()).isEqualTo(URI.create("https://market.example.test/quote"));
+        assertThat(marketData.connectTimeout()).isEqualTo(Duration.ofSeconds(4));
+        assertThat(marketData.readTimeout()).isEqualTo(Duration.ofSeconds(9));
         assertThat(feishu.appId()).isEqualTo("feishu-app-id");
         assertThat(feishu.appSecret()).isEqualTo("feishu-app-secret");
         assertThat(feishu.verificationToken()).isEqualTo("feishu-token");
@@ -142,6 +159,12 @@ class ApplicationPropertiesBindingTest {
         assertThat(feishu.inbox().processingTimeout()).isEqualTo(Duration.ofMinutes(10));
         assertThat(feishu.inbox().pollInterval()).isEqualTo(Duration.ofSeconds(20));
         assertThat(feishu.inbox().pollBatchSize()).isEqualTo(50);
+        assertThat(feishu.outbox().repository()).isEqualTo("jdbc");
+        assertThat(feishu.outbox().maxAttempts()).isEqualTo(7);
+        assertThat(feishu.outbox().retryDelay()).isEqualTo(Duration.ofMinutes(1));
+        assertThat(feishu.outbox().processingTimeout()).isEqualTo(Duration.ofMinutes(12));
+        assertThat(feishu.outbox().pollInterval()).isEqualTo(Duration.ofSeconds(8));
+        assertThat(feishu.outbox().pollBatchSize()).isEqualTo(60);
     }
 
     @Test

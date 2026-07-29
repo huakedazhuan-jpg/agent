@@ -38,7 +38,8 @@ class JdbcFeishuEventInboxRepositoryTest {
                     processed_at TIMESTAMP,
                     next_attempt_at TIMESTAMP,
                     retry_count INTEGER NOT NULL DEFAULT 0,
-                    last_error CLOB
+                    last_error CLOB,
+                    run_id UUID
                 )
                 """);
         repository = new JdbcFeishuEventInboxRepository(
@@ -83,7 +84,7 @@ class JdbcFeishuEventInboxRepositoryTest {
         assertThat(claimed.retryCount()).isOne();
         assertThat(duplicateClaim).isNull();
 
-        repository.markProcessed("event-claim", receivedAt.plusSeconds(3));
+        repository.markProcessed("event-claim", claimed.retryCount(), receivedAt.plusSeconds(3));
         assertThat(repository.findById("event-claim").status())
                 .isEqualTo(FeishuInboxEvent.Status.PROCESSED);
         assertThat(repository.findReadyEventIds(
@@ -97,6 +98,7 @@ class JdbcFeishuEventInboxRepositoryTest {
         repository.claim("event-retry", receivedAt, Duration.ofMinutes(5), 2);
         repository.markFailed(
                 "event-retry",
+                1,
                 "temporary model failure",
                 receivedAt.plusSeconds(1),
                 receivedAt.plusSeconds(30),
@@ -119,6 +121,7 @@ class JdbcFeishuEventInboxRepositoryTest {
 
         repository.markFailed(
                 "event-retry",
+                secondAttempt.retryCount(),
                 "permanent failure",
                 receivedAt.plusSeconds(31),
                 receivedAt.plusSeconds(60),
@@ -160,6 +163,34 @@ class JdbcFeishuEventInboxRepositoryTest {
         assertThat(exhausted.status()).isEqualTo(FeishuInboxEvent.Status.DEAD);
         assertThat(exhausted.lastError()).contains("lease expired");
         assertThat(exhausted.processedAt()).isEqualTo(receivedAt.plusSeconds(300));
+    }
+
+    @Test
+    void bindsRunOnceAndRejectsStaleClaimOutcomes() {
+        Instant receivedAt = Instant.parse("2026-01-01T00:00:00Z");
+        String runId = UUID.randomUUID().toString();
+        repository.receive(event("event-bound", receivedAt));
+        FeishuInboxEvent first = repository.claim(
+                "event-bound", receivedAt, Duration.ofMinutes(5), 3);
+
+        assertThat(repository.bindRun("event-bound", first.retryCount(), runId)).isTrue();
+        assertThat(repository.bindRun(
+                "event-bound", first.retryCount(), UUID.randomUUID().toString())).isFalse();
+        assertThat(repository.findById("event-bound").runId()).isEqualTo(runId);
+
+        FeishuInboxEvent replacement = repository.claim(
+                "event-bound", receivedAt.plusSeconds(300), Duration.ofMinutes(5), 3);
+        assertThat(replacement.retryCount()).isEqualTo(2);
+        assertThat(replacement.runId()).isEqualTo(runId);
+        assertThat(repository.markProcessed(
+                "event-bound", first.retryCount(), receivedAt.plusSeconds(301))).isFalse();
+        assertThat(repository.markFailed(
+                "event-bound", first.retryCount(), "stale", receivedAt.plusSeconds(301),
+                receivedAt.plusSeconds(330), false)).isFalse();
+        assertThat(repository.markProcessed(
+                "event-bound", replacement.retryCount(), receivedAt.plusSeconds(302))).isTrue();
+        assertThat(repository.findById("event-bound").status())
+                .isEqualTo(FeishuInboxEvent.Status.PROCESSED);
     }
 
     private FeishuInboxEvent event(String eventId, Instant receivedAt) {

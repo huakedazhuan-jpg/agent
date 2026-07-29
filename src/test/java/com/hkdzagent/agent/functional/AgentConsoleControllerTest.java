@@ -9,6 +9,11 @@ import com.hkdzagent.agent.security.ActorIdentity;
 import com.hkdzagent.agent.trace.AgentTraceRecorder;
 import com.hkdzagent.agent.trace.AgentTraceSanitizer;
 import com.hkdzagent.agent.trace.InMemoryAgentTraceRepository;
+import com.hkdzagent.agent.runtime.AgentApprovalConflictException;
+import com.hkdzagent.agent.runtime.AgentApprovalOrchestrator;
+import com.hkdzagent.agent.runtime.AgentCancellationService;
+import com.hkdzagent.agent.runtime.AgentRun;
+import com.hkdzagent.agent.runtime.AgentRunCancellation;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -26,6 +31,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
@@ -54,6 +60,12 @@ class AgentConsoleControllerTest {
 
     @MockitoBean
     private LLMClient llmClient;
+
+    @MockitoBean
+    private AgentCancellationService cancellationService;
+
+    @MockitoBean
+    private AgentApprovalOrchestrator approvalOrchestrator;
 
     @Test
     void streamEndpointEmitsStructuredConsoleEvents() throws Exception {
@@ -94,9 +106,11 @@ class AgentConsoleControllerTest {
                 .andReturn();
 
         String body = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
-        assertThat(body).contains("event: started");
-        assertThat(body).contains("event: token");
-        assertThat(body).contains("event: final");
+        assertThat(body).contains("event:started");
+        assertThat(body).contains("event:token");
+        assertThat(body).contains("event:final");
+        assertThat(body).doesNotContain("data:event:");
+        assertThat(body).doesNotContain("data:id:");
         assertThat(body).contains("\"traceId\"");
         assertThat(body).contains("AAPL quote summary");
 
@@ -111,8 +125,8 @@ class AgentConsoleControllerTest {
                 .andReturn()
                 .getResponse()
                 .getContentAsString(StandardCharsets.UTF_8);
-        assertThat(replay).doesNotContain("event: created");
-        assertThat(replay).contains("event: started", "event: token", "event: final");
+        assertThat(replay).doesNotContain("event:created");
+        assertThat(replay).contains("event:started", "event:token", "event:final");
 
         mockMvc.perform(get("/api/agent/runs/{runId}", runId.group(1)))
                 .andExpect(status().isOk())
@@ -157,6 +171,59 @@ class AgentConsoleControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].traceId").value("trace-new"))
                 .andExpect(jsonPath("$[1].traceId").value("trace-old"));
+    }
+
+    @Test
+    void cancelEndpointMapsIdempotentNotFoundAndTerminalOutcomes() throws Exception {
+        AgentRun created = AgentRun.created(
+                "550e8400-e29b-41d4-a716-446655440010",
+                ActorIdentity.localAnonymous(), "session", "conversation", "trace-cancel",
+                "cancel", 5, Instant.parse("2026-01-01T00:00:00Z"));
+        AgentRun cancelled = created.cancel(Instant.parse("2026-01-01T00:00:01Z"));
+        when(cancellationService.cancel(
+                any(ActorIdentity.class), eq(created.runId()), eq("stop now")))
+                .thenReturn(new AgentRunCancellation(
+                        AgentRunCancellation.Outcome.CANCELLED, cancelled));
+        when(cancellationService.cancel(
+                any(ActorIdentity.class), eq("550e8400-e29b-41d4-a716-446655440011"), eq(null)))
+                .thenReturn(new AgentRunCancellation(
+                        AgentRunCancellation.Outcome.NOT_FOUND, null));
+        AgentRun completed = created.claim(
+                        "worker", Instant.parse("2026-01-01T00:00:00Z"),
+                        Instant.parse("2026-01-01T00:01:00Z"))
+                .complete("done", "worker", 1, Instant.parse("2026-01-01T00:00:02Z"));
+        when(cancellationService.cancel(
+                any(ActorIdentity.class), eq("550e8400-e29b-41d4-a716-446655440012"), eq(null)))
+                .thenReturn(new AgentRunCancellation(
+                        AgentRunCancellation.Outcome.TERMINAL_CONFLICT, completed));
+
+        mockMvc.perform(post("/api/agent/runs/{runId}/cancel", created.runId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"stop now\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CANCELLED"))
+                .andExpect(jsonPath("$.newlyCancelled").value(true));
+        mockMvc.perform(post("/api/agent/runs/{runId}/cancel",
+                        "550e8400-e29b-41d4-a716-446655440011"))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(post("/api/agent/runs/{runId}/cancel",
+                        "550e8400-e29b-41d4-a716-446655440012"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value("COMPLETED"));
+    }
+
+    @Test
+    void lateApprovalAfterCancellationReturnsConflict() throws Exception {
+        String confirmationId = "550e8400-e29b-41d4-a716-446655440099";
+        when(approvalOrchestrator.approve(confirmationId))
+                .thenThrow(new AgentApprovalConflictException(
+                        "agent run is no longer waiting for approval "
+                                + confirmationId + " (CANCELLED)"));
+
+        mockMvc.perform(post(
+                        "/api/agent/tool-confirmations/{confirmationId}/approve", confirmationId))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value(containsString("CANCELLED")));
     }
 
     @TestConfiguration

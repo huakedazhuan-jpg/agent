@@ -105,6 +105,10 @@ class SecurityFunctionalTest {
                 .andExpect(status().isOk());
         mockMvc.perform(post("/api/agent/tool-confirmations/id/approve").with(userJwt))
                 .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/agent/admin/feishu-outbox/summary").with(userJwt))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/actuator/metrics").with(userJwt))
+                .andExpect(status().isForbidden());
     }
 
     @Test
@@ -112,8 +116,16 @@ class SecurityFunctionalTest {
         mockMvc.perform(post("/api/agent/tool-confirmations/id/approve")
                         .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))))
                 .andExpect(status().isOk());
+        mockMvc.perform(get("/api/agent/admin/feishu-outbox/summary")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/actuator/metrics")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))))
+                .andExpect(status().isOk());
 
         mockMvc.perform(post("/api/feishu/webhook"))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/actuator/health"))
                 .andExpect(status().isOk());
     }
 
@@ -135,6 +147,21 @@ class SecurityProbeController {
     @PostMapping("/api/agent/tool-confirmations/{id}/approve")
     String approve() {
         return "approved";
+    }
+
+    @GetMapping("/api/agent/admin/feishu-outbox/summary")
+    String outboxSummary() {
+        return "summary";
+    }
+
+    @GetMapping("/actuator/metrics")
+    String metrics() {
+        return "metrics";
+    }
+
+    @GetMapping("/actuator/health")
+    String health() {
+        return "up";
     }
 
     @PostMapping("/api/feishu/webhook")

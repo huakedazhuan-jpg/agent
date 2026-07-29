@@ -17,6 +17,9 @@ class ToolSystemArchitectureTest {
 
     @Test
     void eachToolAndSharedConcernHasItsOwnClass() {
+        assertClassExists("AgentTool");
+        assertClassExists("AgentToolRegistry");
+        assertClassExists("ToolMetadata");
         assertClassExists("ToolResult");
         assertClassExists("ToolExecutionSupport");
         assertClassExists("ToolPermissionService");
@@ -24,6 +27,14 @@ class ToolSystemArchitectureTest {
         assertClassExists("CommandExecuteTool");
         assertClassExists("HttpRequestTool");
         assertClassExists("WebSearchTool");
+    }
+
+    @Test
+    void everyProductionToolImplementsTheUnifiedAgentToolContract() {
+        assertAgentTool("WorkspaceFileTool");
+        assertAgentTool("CommandExecuteTool");
+        assertAgentTool("HttpRequestTool");
+        assertAgentTool("WebSearchTool");
     }
 
     @Test
@@ -38,6 +49,8 @@ class ToolSystemArchitectureTest {
 
     @Test
     void registryKeepsCompatibleFunctionBeans() throws Exception {
+        Method registryBean = ToolRegistryConfig.class.getMethod("agentToolRegistry");
+        assertThat(registryBean.getReturnType()).isEqualTo(loadClass("AgentToolRegistry"));
         assertFunctionBean("fileOperationTool");
         assertFunctionBean("commandExecuteTool");
         assertFunctionBean("httpRequestTool");
@@ -65,12 +78,30 @@ class ToolSystemArchitectureTest {
         Class<?> toolClass = loadClass(toolClassName);
         List<Method> executeMethods = Arrays.stream(toolClass.getDeclaredMethods())
                 .filter(method -> method.getName().equals("execute"))
+                .filter(method -> !method.isBridge())
                 .toList();
 
         assertThat(executeMethods)
                 .as(toolClassName + " should expose an execute method")
                 .hasSize(1);
         assertThat(executeMethods.get(0).getReturnType()).isEqualTo(toolResultClass);
+    }
+
+    private static void assertAgentTool(String toolClassName) {
+        Class<?> toolClass = loadClass(toolClassName);
+        Class<?> agentToolClass = loadClass("AgentTool");
+
+        assertThat(agentToolClass.isAssignableFrom(toolClass))
+                .as(toolClassName + " should implement AgentTool")
+                .isTrue();
+        try {
+            assertThat(toolClass.getMethod("metadata").getReturnType())
+                    .isEqualTo(loadClass("ToolMetadata"));
+            assertThat(toolClass.getMethod("inputType").getReturnType())
+                    .isEqualTo(Class.class);
+        } catch (NoSuchMethodException e) {
+            fail(toolClassName + " should expose metadata() and inputType()");
+        }
     }
 
     private static void assertFunctionBean(String methodName) throws Exception {

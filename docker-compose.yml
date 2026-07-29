@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:18-alpine
+    image: postgres:17-alpine
     container_name: xingclaw-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-xingclaw_agent}
@@ -9,7 +9,7 @@ services:
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres17-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 10s
@@ -33,5 +33,5 @@ services:
       retries: 5
 
 volumes:
-  postgres-data:
+  postgres17-data:
   redis-data:

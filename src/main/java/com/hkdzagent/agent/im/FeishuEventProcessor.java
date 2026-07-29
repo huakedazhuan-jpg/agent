@@ -2,8 +2,10 @@ package com.hkdzagent.agent.im;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.hkdzagent.agent.ai.LLMClient;
 import com.hkdzagent.agent.memory.OwnedConversationId;
+import com.hkdzagent.agent.runtime.AgentRun;
+import com.hkdzagent.agent.runtime.AgentRunCoordinator;
+import com.hkdzagent.agent.runtime.AgentRunStatus;
 import com.hkdzagent.agent.security.ActorIdentity;
 import com.hkdzagent.agent.trace.AgentTraceSanitizer;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,7 +23,8 @@ public class FeishuEventProcessor {
     private static final String ERROR_REPLY = "抱歉，消息处理失败，请稍后再试。";
 
     private final ObjectMapper objectMapper;
-    private final LLMClient llmClient;
+    private final AgentRunCoordinator runCoordinator;
+    private final FeishuRunSubmissionService submissionService;
     private final FeishuReplyClient feishuReplyClient;
     private final FeishuEventInboxRepository inboxRepository;
     private final FeishuProperties.Inbox inboxProperties;
@@ -32,18 +35,21 @@ public class FeishuEventProcessor {
     @Autowired
     public FeishuEventProcessor(
             ObjectMapper objectMapper,
-            LLMClient llmClient,
+            AgentRunCoordinator runCoordinator,
+            FeishuRunSubmissionService submissionService,
             FeishuReplyClient feishuReplyClient,
             FeishuEventInboxRepository inboxRepository,
             FeishuProperties properties,
             @Qualifier("feishuTaskExecutor") Executor executor
     ) {
-        this(objectMapper, llmClient, feishuReplyClient, inboxRepository, properties, executor, Clock.systemUTC());
+        this(objectMapper, runCoordinator, submissionService, feishuReplyClient,
+                inboxRepository, properties, executor, Clock.systemUTC());
     }
 
     FeishuEventProcessor(
             ObjectMapper objectMapper,
-            LLMClient llmClient,
+            AgentRunCoordinator runCoordinator,
+            FeishuRunSubmissionService submissionService,
             FeishuReplyClient feishuReplyClient,
             FeishuEventInboxRepository inboxRepository,
             FeishuProperties properties,
@@ -51,7 +57,8 @@ public class FeishuEventProcessor {
             Clock clock
     ) {
         this.objectMapper = objectMapper;
-        this.llmClient = llmClient;
+        this.runCoordinator = runCoordinator;
+        this.submissionService = submissionService;
         this.feishuReplyClient = feishuReplyClient;
         this.inboxRepository = inboxRepository;
         this.inboxProperties = properties.inbox();
@@ -89,16 +96,32 @@ public class FeishuEventProcessor {
             JsonNode contentNode = objectMapper.readTree(contentStr);
             String userText = contentNode.path("text").asText();
 
-            String conversationId = new OwnedConversationId(ActorIdentity.feishu(openId), openId).encode();
-            String answer = llmClient.askWithTools(userText, conversationId);
-            feishuReplyClient.replyText(openId, answer);
-            inboxRepository.markProcessed(eventId, clock.instant());
+            ActorIdentity owner = ActorIdentity.feishu(openId);
+            String conversationId = new OwnedConversationId(owner, openId).encode();
+            AgentRun run = submissionService.findOrCreate(
+                    inboxEvent, owner, openId, conversationId, userText);
+            if (run.status() == AgentRunStatus.CREATED) {
+                run = runCoordinator.executeCreated(run.runId(), "feishu");
+            }
+            if (run.status() != AgentRunStatus.RUNNING
+                    && run.status() != AgentRunStatus.WAITING_APPROVAL
+                    && !run.status().terminal()) {
+                throw new IllegalStateException(
+                        "agent run failed: "
+                                + (run.errorMessage() == null
+                                ? run.status().name()
+                                : run.errorMessage()));
+            }
+            inboxRepository.markProcessed(
+                    eventId, inboxEvent.retryCount(), clock.instant());
         } catch (Exception e) {
             boolean terminal = inboxEvent.retryCount() >= inboxProperties.maxAttempts();
             Instant failedAt = clock.instant();
             Instant nextAttemptAt = failedAt.plus(inboxProperties.retryDelay());
-            inboxRepository.markFailed(eventId, safeError(e), failedAt, nextAttemptAt, terminal);
-            if (terminal && !inboxEvent.openId().isBlank()) {
+            boolean failureRecorded = inboxRepository.markFailed(
+                    eventId, inboxEvent.retryCount(), safeError(e),
+                    failedAt, nextAttemptAt, terminal);
+            if (terminal && failureRecorded && !inboxEvent.openId().isBlank()) {
                 try {
                     feishuReplyClient.replyText(inboxEvent.openId(), ERROR_REPLY);
                 } catch (Exception ignored) {

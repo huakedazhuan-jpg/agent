@@ -3,6 +3,7 @@ package com.hkdzagent.agent.runtime;
 public enum AgentRunEventType {
     RUN_CREATED,
     RUN_STARTED,
+    CONTEXT_ASSEMBLED,
     MODEL_STARTED,
     TOKEN_DELTA,
     MODEL_COMPLETED,
@@ -10,6 +11,8 @@ public enum AgentRunEventType {
     APPROVAL_REQUIRED,
     TOOL_STARTED,
     TOOL_COMPLETED,
+    RUN_RECOVERY_STARTED,
+    RUN_RECOVERY_BLOCKED,
     RUN_COMPLETED,
     RUN_FAILED,
     RUN_CANCELLED

@@ -50,6 +50,8 @@ class SecretConfigurationTest {
                 .isEqualTo("${AGENT_MEMORY_FILE:data/chat-memory.jsonl}");
         assertThat(applicationYml.getProperty("agent.memory.repository"))
                 .isEqualTo("${AGENT_MEMORY_REPOSITORY:file}");
+        assertThat(applicationYml.getProperty("agent.audit.repository"))
+                .isEqualTo("${AGENT_AUDIT_REPOSITORY:memory}");
         assertThat(applicationYml.getProperty("agent.tool-approval.repository"))
                 .isEqualTo("${AGENT_TOOL_APPROVAL_REPOSITORY:memory}");
         assertThat(applicationYml.getProperty("agent.tool-approval.ttl"))
@@ -58,6 +60,14 @@ class SecretConfigurationTest {
                 .isEqualTo("${FEISHU_INBOX_REPOSITORY:memory}");
         assertThat(applicationYml.getProperty("feishu.inbox.max-attempts"))
                 .isEqualTo("${FEISHU_INBOX_MAX_ATTEMPTS:3}");
+        assertThat(applicationYml.getProperty("feishu.outbox.repository"))
+                .isEqualTo("${FEISHU_OUTBOX_REPOSITORY:memory}");
+        assertThat(applicationYml.getProperty("feishu.outbox.max-attempts"))
+                .isEqualTo("${FEISHU_OUTBOX_MAX_ATTEMPTS:5}");
+        assertThat(applicationYml.getProperty("management.endpoints.web.exposure.include"))
+                .isEqualTo("health,info,metrics");
+        assertThat(applicationYml.getProperty("management.endpoint.health.show-details"))
+                .isEqualTo("never");
         assertThat(applicationYml.getProperty("agent.rag.index-file"))
                 .isEqualTo("${AGENT_RAG_INDEX_FILE:data/rag-index.json}");
         assertThat(applicationYml.getProperty("agent.tools.security.allowed-commands"))
@@ -99,6 +109,8 @@ class SecretConfigurationTest {
                 Map.entry("FEISHU_ASYNC_QUEUE_CAPACITY", "200"),
                 Map.entry("FEISHU_INBOX_REPOSITORY", "jdbc"),
                 Map.entry("FEISHU_INBOX_MAX_ATTEMPTS", "5"),
+                Map.entry("FEISHU_OUTBOX_REPOSITORY", "jdbc"),
+                Map.entry("FEISHU_OUTBOX_MAX_ATTEMPTS", "7"),
                 Map.entry("TAVILY_API_KEY", "tavily-from-env"),
                 Map.entry("AGENT_KIMI_REQUEST_TIMEOUT", "45s"),
                 Map.entry("AGENT_KIMI_MAX_TOOL_ROUNDS", "7"),
@@ -123,6 +135,8 @@ class SecretConfigurationTest {
         assertThat(environment.getProperty("feishu.async.queue-capacity")).isEqualTo("200");
         assertThat(environment.getProperty("feishu.inbox.repository")).isEqualTo("jdbc");
         assertThat(environment.getProperty("feishu.inbox.max-attempts")).isEqualTo("5");
+        assertThat(environment.getProperty("feishu.outbox.repository")).isEqualTo("jdbc");
+        assertThat(environment.getProperty("feishu.outbox.max-attempts")).isEqualTo("7");
         assertThat(environment.getProperty("tavily.api-key")).isEqualTo("tavily-from-env");
         assertThat(environment.getProperty("agent.kimi.request-timeout")).isEqualTo("45s");
         assertThat(environment.getProperty("agent.kimi.max-tool-rounds")).isEqualTo("7");

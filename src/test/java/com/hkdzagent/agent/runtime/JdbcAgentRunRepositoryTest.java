@@ -11,7 +11,13 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -38,6 +44,7 @@ class JdbcAgentRunRepositoryTest {
                     last_event_sequence BIGINT NOT NULL, checkpoint JSON NOT NULL,
                     pending_approval_id UUID, final_answer CLOB, error_message CLOB,
                     lease_owner VARCHAR(128), lease_expires_at TIMESTAMP,
+                    lease_epoch BIGINT NOT NULL DEFAULT 0,
                     created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, completed_at TIMESTAMP
                 )
                 """);
@@ -78,6 +85,7 @@ class JdbcAgentRunRepositoryTest {
 
         AgentRunClaim first = repository.claim(stored.runId(), "worker-a", now, Duration.ofSeconds(30));
         assertThat(first.started()).isTrue();
+        assertThat(first.run().leaseEpoch()).isOne();
         assertThat(repository.claim(stored.runId(), "worker-b", now.plusSeconds(1), Duration.ofSeconds(30))).isNull();
         AgentRunClaim reclaimed = repository.claim(
                 stored.runId(), "worker-b", now.plusSeconds(31), Duration.ofSeconds(30));
@@ -85,13 +93,30 @@ class JdbcAgentRunRepositoryTest {
         assertThat(reclaimed).isNotNull();
         assertThat(reclaimed.started()).isFalse();
         assertThat(reclaimed.run().leaseOwner()).isEqualTo("worker-b");
+        assertThat(reclaimed.run().leaseEpoch()).isEqualTo(2);
+        assertThat(repository.appendWorkerEvent(
+                stored.runId(), "worker-a", first.run().leaseEpoch(),
+                AgentRunEventType.TOKEN_DELTA, "{}", now.plusSeconds(32))).isNull();
+        assertThat(repository.appendWorkerEvent(
+                stored.runId(), "worker-b", reclaimed.run().leaseEpoch(),
+                AgentRunEventType.TOKEN_DELTA, "{}", now.plusSeconds(32))).isNotNull();
+        assertThat(repository.renewLease(
+                stored.runId(), "worker-a", first.run().leaseEpoch(),
+                now.plusSeconds(32), Duration.ofSeconds(30))).isNull();
+        AgentRun renewed = repository.renewLease(
+                stored.runId(), "worker-b", reclaimed.run().leaseEpoch(),
+                now.plusSeconds(32), Duration.ofSeconds(30));
+        assertThat(renewed.leaseEpoch()).isEqualTo(reclaimed.run().leaseEpoch());
+        assertThat(renewed.leaseExpiresAt()).isEqualTo(now.plusSeconds(62));
     }
 
     @Test
     void rejectsStaleStateUpdateAndPreservesLatestEventSequence() {
         AgentRun stored = repository.create(run("user-a"), "{}");
         AgentRunClaim claim = repository.claim(stored.runId(), "worker-a", now, Duration.ofSeconds(30));
-        AgentRun next = claim.run().advance(1, "{\"step\":1}", "worker-a", now.plusSeconds(1));
+        AgentRun next = claim.run().advance(
+                1, "{\"step\":1}", "worker-a",
+                claim.run().leaseEpoch(), now.plusSeconds(1));
         repository.appendEvent(stored.runId(), AgentRunEventType.MODEL_STARTED, "{}", now.plusSeconds(1));
 
         AgentRun updated = repository.update(next, claim.run().version(), "worker-a");
@@ -99,6 +124,151 @@ class JdbcAgentRunRepositoryTest {
         assertThat(updated.currentStep()).isOne();
         assertThat(updated.lastEventSequence()).isEqualTo(2);
         assertThat(repository.update(next, claim.run().version(), "worker-a")).isNull();
+    }
+
+    @Test
+    void atomicallyClaimsOldestExpiredRunningRun() {
+        AgentRun oldest = repository.create(run("user-oldest"), "{}");
+        AgentRun later = repository.create(run("user-later"), "{}");
+        AgentRun neverStarted = repository.create(run("user-created"), "{}");
+        AgentRunClaim oldestInitial = repository.claim(
+                oldest.runId(), "worker-old", now, Duration.ofSeconds(10));
+        AgentRunClaim laterInitial = repository.claim(
+                later.runId(), "worker-later", now, Duration.ofSeconds(30));
+
+        AgentRunClaim recovered = repository.claimNextExpired(
+                "recovery-worker", now.plusSeconds(10), Duration.ofSeconds(20));
+
+        assertThat(recovered).isNotNull();
+        assertThat(recovered.started()).isFalse();
+        assertThat(recovered.run().runId()).isEqualTo(oldest.runId());
+        assertThat(recovered.run().leaseOwner()).isEqualTo("recovery-worker");
+        assertThat(recovered.run().leaseEpoch())
+                .isEqualTo(oldestInitial.run().leaseEpoch() + 1);
+        assertThat(recovered.run().leaseExpiresAt()).isEqualTo(now.plusSeconds(30));
+        assertThat(repository.claimNextExpired(
+                "another-worker", now.plusSeconds(10), Duration.ofSeconds(20))).isNull();
+        assertThat(repository.findById(later.runId()).leaseEpoch())
+                .isEqualTo(laterInitial.run().leaseEpoch());
+        assertThat(repository.findById(neverStarted.runId()).status())
+                .isEqualTo(AgentRunStatus.CREATED);
+    }
+
+    @Test
+    void allowsOnlyOneRecoveryWorkerToClaimExpiredRun() throws Exception {
+        AgentRun stored = repository.create(run("user-race"), "{}");
+        AgentRunClaim initial = repository.claim(
+                stored.runId(), "initial-worker", now, Duration.ofSeconds(5));
+        CyclicBarrier start = new CyclicBarrier(2);
+        ExecutorService workers = Executors.newFixedThreadPool(2);
+        try {
+            Future<AgentRunClaim> first = workers.submit(() -> {
+                start.await();
+                return repository.claimNextExpired(
+                        "recovery-a", now.plusSeconds(6), Duration.ofSeconds(30));
+            });
+            Future<AgentRunClaim> second = workers.submit(() -> {
+                start.await();
+                return repository.claimNextExpired(
+                        "recovery-b", now.plusSeconds(6), Duration.ofSeconds(30));
+            });
+
+            List<AgentRunClaim> successful = java.util.stream.Stream.of(first.get(), second.get())
+                    .filter(java.util.Objects::nonNull)
+                    .toList();
+
+            assertThat(successful).singleElement().satisfies(claim -> {
+                assertThat(claim.run().runId()).isEqualTo(stored.runId());
+                assertThat(claim.run().leaseEpoch())
+                        .isEqualTo(initial.run().leaseEpoch() + 1);
+            });
+            assertThat(repository.findById(stored.runId()).leaseOwner())
+                    .isIn("recovery-a", "recovery-b");
+        } finally {
+            workers.shutdownNow();
+        }
+    }
+
+    @Test
+    void aggregatesDurableRecoveryEvidenceFromRunEvents() {
+        AgentRun stored = repository.create(run("user-evidence"), "{}");
+        AgentRunClaim claim = repository.claim(
+                stored.runId(), "worker-evidence", now, Duration.ofSeconds(30));
+        repository.appendWorkerEvent(
+                stored.runId(), "worker-evidence", claim.run().leaseEpoch(),
+                AgentRunEventType.TOOL_STARTED, "{}", now.plusSeconds(1));
+        repository.appendWorkerEvent(
+                stored.runId(), "worker-evidence", claim.run().leaseEpoch(),
+                AgentRunEventType.RUN_RECOVERY_STARTED, "{}", now.plusSeconds(2));
+        repository.appendWorkerEvent(
+                stored.runId(), "worker-evidence", claim.run().leaseEpoch(),
+                AgentRunEventType.RUN_RECOVERY_STARTED, "{}", now.plusSeconds(3));
+
+        assertThat(repository.findRecoveryEvidence(stored.runId()))
+                .isEqualTo(new AgentRunRecoveryEvidence(true, 2));
+        assertThat(repository.findRecoveryEvidence(UUID.randomUUID().toString())).isNull();
+    }
+
+    @Test
+    void executesGateActionOnlyForCurrentUnexpiredLeaseFence() {
+        AgentRun stored = repository.create(run("user-gate"), "{}");
+        AgentRunClaim claim = repository.claim(
+                stored.runId(), "worker-gate", now, Duration.ofSeconds(30));
+        AtomicInteger executions = new AtomicInteger();
+
+        String allowed = repository.executeWithActiveLease(
+                stored.runId(), "worker-gate", claim.run().leaseEpoch(), now.plusSeconds(1),
+                () -> {
+                    executions.incrementAndGet();
+                    return "reserved";
+                });
+        String staleEpoch = repository.executeWithActiveLease(
+                stored.runId(), "worker-gate", claim.run().leaseEpoch() + 1, now.plusSeconds(1),
+                () -> {
+                    executions.incrementAndGet();
+                    return "must-not-run";
+                });
+        String expired = repository.executeWithActiveLease(
+                stored.runId(), "worker-gate", claim.run().leaseEpoch(), now.plusSeconds(31),
+                () -> {
+                    executions.incrementAndGet();
+                    return "must-not-run";
+                });
+
+        assertThat(allowed).isEqualTo("reserved");
+        assertThat(staleEpoch).isNull();
+        assertThat(expired).isNull();
+        assertThat(executions).hasValue(1);
+    }
+
+    @Test
+    void executesApprovalDecisionOnlyForMatchingWaitingRun() {
+        AgentRun stored = repository.create(run("user-approval"), "{}");
+        AgentRunClaim claim = repository.claim(
+                stored.runId(), "worker-approval", now, Duration.ofSeconds(30));
+        String approvalId = UUID.randomUUID().toString();
+        AgentRun waiting = claim.run().waitForApproval(
+                approvalId, "{\"step\":1}", "worker-approval",
+                claim.run().leaseEpoch(), now.plusSeconds(1));
+        repository.update(waiting, claim.run().version(), "worker-approval");
+        AtomicInteger decisions = new AtomicInteger();
+
+        String mismatched = repository.executeWithWaitingApproval(
+                stored.runId(), UUID.randomUUID().toString(),
+                () -> {
+                    decisions.incrementAndGet();
+                    return "must-not-run";
+                });
+        String allowed = repository.executeWithWaitingApproval(
+                stored.runId(), approvalId,
+                () -> {
+                    decisions.incrementAndGet();
+                    return "approved";
+                });
+
+        assertThat(mismatched).isNull();
+        assertThat(allowed).isEqualTo("approved");
+        assertThat(decisions).hasValue(1);
     }
 
     private AgentRun run(String userId) {

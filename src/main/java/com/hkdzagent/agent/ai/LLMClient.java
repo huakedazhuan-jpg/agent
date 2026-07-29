@@ -6,6 +6,7 @@ import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import com.hkdzagent.agent.loop.AgentLoopResult;
+import com.hkdzagent.agent.loop.AgentObservation;
 
 @Service
 public class LLMClient {
@@ -73,11 +74,25 @@ public class LLMClient {
         return kimiToolCallingClient.runWithTools(userMessage, conversationId, traceId, observer);
     }
 
-    public AgentLoopResult resumeWithApprovedTool(
-            String checkpointJson,
+    public AgentLoopResult runWithTools(
+            String userMessage,
+            String conversationId,
+            String ownerKey,
+            String runId,
+            String traceId,
             AgentExecutionObserver observer
     ) {
-        return kimiToolCallingClient.resumeWithApprovedTool(checkpointJson, observer);
+        return kimiToolCallingClient.runWithTools(
+                userMessage, conversationId, ownerKey, runId, traceId, observer);
+    }
+
+    public AgentLoopResult resumeWithApprovedTool(
+            String checkpointJson,
+            AgentObservation approvedObservation,
+            AgentExecutionObserver observer
+    ) {
+        return kimiToolCallingClient.resumeWithApprovedTool(
+                checkpointJson, approvedObservation, observer);
     }
 }
 

@@ -51,14 +51,46 @@ feishu:
     processing-timeout: ${FEISHU_INBOX_PROCESSING_TIMEOUT:5m}
     poll-interval: ${FEISHU_INBOX_POLL_INTERVAL:30s}
     poll-batch-size: ${FEISHU_INBOX_POLL_BATCH_SIZE:20}
+  outbox:
+    repository: ${FEISHU_OUTBOX_REPOSITORY:memory}
+    max-attempts: ${FEISHU_OUTBOX_MAX_ATTEMPTS:5}
+    retry-delay: ${FEISHU_OUTBOX_RETRY_DELAY:30s}
+    processing-timeout: ${FEISHU_OUTBOX_PROCESSING_TIMEOUT:5m}
+    poll-interval: ${FEISHU_OUTBOX_POLL_INTERVAL:5s}
+    poll-batch-size: ${FEISHU_OUTBOX_POLL_BATCH_SIZE:20}
 
 tavily:
   api-key: ${TAVILY_API_KEY}
+
+market-data:
+  twelve-data:
+    api-key: ${TWELVE_DATA_API_KEY:demo}
+    base-url: ${TWELVE_DATA_BASE_URL:https://api.twelvedata.com/quote}
+    connect-timeout: ${TWELVE_DATA_CONNECT_TIMEOUT:10s}
+    read-timeout: ${TWELVE_DATA_READ_TIMEOUT:20s}
+
 agent:
+  context:
+    max-input-tokens: ${AGENT_CONTEXT_MAX_INPUT_TOKENS:12000}
+    max-current-user-tokens: ${AGENT_CONTEXT_MAX_CURRENT_USER_TOKENS:4000}
+    system-tokens: ${AGENT_CONTEXT_SYSTEM_TOKENS:1500}
+    long-term-memory-tokens: ${AGENT_CONTEXT_LONG_TERM_MEMORY_TOKENS:2000}
+    summary-tokens: ${AGENT_CONTEXT_SUMMARY_TOKENS:1200}
+    recent-message-tokens: ${AGENT_CONTEXT_RECENT_MESSAGE_TOKENS:3500}
+    tool-observation-tokens: ${AGENT_CONTEXT_TOOL_OBSERVATION_TOKENS:1800}
+    reserved-protocol-tokens: ${AGENT_CONTEXT_RESERVED_PROTOCOL_TOKENS:2000}
+  memory-processing:
+    poll-interval: ${AGENT_MEMORY_PROCESSING_POLL_INTERVAL:5s}
+  audit:
+    repository: ${AGENT_AUDIT_REPOSITORY:memory}
   runtime:
     repository: ${AGENT_RUNTIME_REPOSITORY:memory}
     max-steps: ${AGENT_RUNTIME_MAX_STEPS:5}
     lease-duration: ${AGENT_RUNTIME_LEASE_DURATION:2m}
+    heartbeat-interval: ${AGENT_RUNTIME_HEARTBEAT_INTERVAL:30s}
+    recovery-batch-size: ${AGENT_RUNTIME_RECOVERY_BATCH_SIZE:10}
+    max-recovery-attempts: ${AGENT_RUNTIME_MAX_RECOVERY_ATTEMPTS:3}
+    recovery-interval: ${AGENT_RUNTIME_RECOVERY_INTERVAL:15s}
     event-replay-limit: ${AGENT_RUNTIME_EVENT_REPLAY_LIMIT:500}
   security:
     enabled: ${AGENT_SECURITY_ENABLED:false}
@@ -102,3 +134,12 @@ agent:
         connect-timeout: 2s
         read-timeout: 5s
         max-response-bytes: 8192
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: never

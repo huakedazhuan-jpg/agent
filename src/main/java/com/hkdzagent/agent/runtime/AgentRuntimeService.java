@@ -3,12 +3,18 @@ package com.hkdzagent.agent.runtime;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hkdzagent.agent.security.ActorIdentity;
+import com.hkdzagent.agent.context.ConservativeTokenCounter;
+import com.hkdzagent.agent.context.TokenCounter;
+import com.hkdzagent.agent.memory.ConversationMessageRepository;
+import com.hkdzagent.agent.memory.OwnedConversationId;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 public class AgentRuntimeService {
 
@@ -16,6 +22,8 @@ public class AgentRuntimeService {
     private final AgentRuntimeProperties properties;
     private final ObjectMapper objectMapper;
     private final Clock clock;
+    private final ConversationMessageRepository messageRepository;
+    private final TokenCounter tokenCounter;
 
     public AgentRuntimeService(
             AgentRunRepository repository,
@@ -23,13 +31,30 @@ public class AgentRuntimeService {
             ObjectMapper objectMapper,
             Clock clock
     ) {
+        this(repository, properties, objectMapper, clock,
+                ConversationMessageRepository.NOOP, new ConservativeTokenCounter());
+    }
+
+    public AgentRuntimeService(
+            AgentRunRepository repository,
+            AgentRuntimeProperties properties,
+            ObjectMapper objectMapper,
+            Clock clock,
+            ConversationMessageRepository messageRepository,
+            TokenCounter tokenCounter
+    ) {
         this.repository = repository;
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.clock = clock;
+        this.messageRepository = messageRepository == null
+                ? ConversationMessageRepository.NOOP
+                : messageRepository;
+        this.tokenCounter = tokenCounter == null ? new ConservativeTokenCounter() : tokenCounter;
         validateProperties(properties);
     }
 
+    @Transactional
     public AgentRun create(
             ActorIdentity owner,
             String sessionId,
@@ -48,24 +73,66 @@ public class AgentRuntimeService {
                 properties.getMaxSteps(),
                 now
         );
-        return repository.create(run, json(Map.of(
+        AgentRun created = repository.create(run, json(Map.of(
                 "traceId", traceId,
                 "sessionId", sessionId,
                 "conversationId", conversationId
         )));
+        OwnedConversationId identity = OwnedConversationId.decodeOrLegacy(conversationId);
+        messageRepository.saveRunMessage(
+                owner.key(), identity.externalId(), created.runId(),
+                "USER", userMessage, tokenCounter.count(userMessage),
+                "USER", "RUN_USER");
+        return created;
     }
 
     public AgentRunClaim claim(String runId, String workerId) {
         return repository.claim(runId, workerId, clock.instant(), properties.getLeaseDuration());
     }
 
-    public AgentRun checkpoint(String runId, String workerId, int step, Object checkpoint) {
+    public AgentRunClaim claimNextExpired(String workerId) {
+        return repository.claimNextExpired(
+                workerId, clock.instant(), properties.getLeaseDuration());
+    }
+
+    public AgentRunRecoveryEvidence recoveryEvidence(String runId) {
+        AgentRunRecoveryEvidence evidence = repository.findRecoveryEvidence(runId);
+        if (evidence == null) {
+            throw new IllegalArgumentException("agent run not found: " + runId);
+        }
+        return evidence;
+    }
+
+    public AgentRun renewLease(String runId, String workerId, long leaseEpoch) {
+        AgentRun renewed = repository.renewLease(
+                runId, workerId, leaseEpoch, clock.instant(), properties.getLeaseDuration());
+        if (renewed == null) {
+            throw new AgentRunLeaseLostException("agent run lease fence was lost");
+        }
+        return renewed;
+    }
+
+    public AgentRun assertExecutionActive(String runId, String workerId, long leaseEpoch) {
+        AgentRun current = requireRun(runId);
+        if (current.status() == AgentRunStatus.CANCELLED) {
+            throw new AgentRunCancelledException("agent run was cancelled: " + runId);
+        }
+        if (!current.holdsLease(workerId, leaseEpoch, clock.instant())) {
+            throw new AgentRunLeaseLostException("agent run lease fence was lost");
+        }
+        return current;
+    }
+
+    public AgentRun checkpoint(
+            String runId, String workerId, long leaseEpoch, int step, Object checkpoint
+    ) {
         Instant now = clock.instant();
         AgentRun current = requireRun(runId);
         AgentRun next = current.advance(
                 step,
                 json(checkpoint),
                 workerId,
+                leaseEpoch,
                 now,
                 now.plus(properties.getLeaseDuration())
         );
@@ -76,22 +143,28 @@ public class AgentRuntimeService {
         return persisted;
     }
 
-    public AgentRun complete(String runId, String workerId, String answer) {
+    @Transactional
+    public AgentRun complete(String runId, String workerId, long leaseEpoch, String answer) {
         Instant now = clock.instant();
         AgentRun current = requireRun(runId);
         AgentRun persisted = repository.update(
-                current.complete(answer, workerId, now), current.version(), workerId);
+                current.complete(answer, workerId, leaseEpoch, now), current.version(), workerId);
         if (persisted == null) {
             throw new IllegalStateException("agent run changed concurrently or worker lease was lost");
         }
+        OwnedConversationId identity = OwnedConversationId.decodeOrLegacy(persisted.conversationId());
+        messageRepository.saveRunMessage(
+                persisted.ownerKey(), identity.externalId(), persisted.runId(),
+                "ASSISTANT", answer, tokenCounter.count(answer),
+                "ASSISTANT", "RUN_ASSISTANT");
         return persisted;
     }
 
-    public AgentRun fail(String runId, String workerId, String error) {
+    public AgentRun fail(String runId, String workerId, long leaseEpoch, String error) {
         Instant now = clock.instant();
         AgentRun current = requireRun(runId);
         AgentRun persisted = repository.update(
-                current.fail(error, workerId, now), current.version(), workerId);
+                current.fail(error, workerId, leaseEpoch, now), current.version(), workerId);
         if (persisted == null) {
             throw new IllegalStateException("agent run changed concurrently or worker lease was lost");
         }
@@ -99,12 +172,14 @@ public class AgentRuntimeService {
     }
 
     public AgentRun waitForApproval(
-            String runId, String workerId, String approvalId, String checkpointJson
+            String runId, String workerId, long leaseEpoch,
+            String approvalId, String checkpointJson
     ) {
         Instant now = clock.instant();
         AgentRun current = requireRun(runId);
         AgentRun persisted = repository.update(
-                current.waitForApproval(approvalId, checkpointJson, workerId, now),
+                current.waitForApproval(
+                        approvalId, checkpointJson, workerId, leaseEpoch, now),
                 current.version(), workerId);
         if (persisted == null) {
             throw new IllegalStateException("agent run changed concurrently or worker lease was lost");
@@ -136,14 +211,69 @@ public class AgentRuntimeService {
         return persisted;
     }
 
+    public <T> T decideWaitingApproval(
+            String runId,
+            String approvalId,
+            Supplier<T> decision
+    ) {
+        return repository.executeWithWaitingApproval(runId, approvalId, decision);
+    }
+
+    public AgentRunCancellation cancelOwned(String runId, ActorIdentity owner) {
+        for (int attempt = 0; attempt < 3; attempt++) {
+            AgentRun current = repository.findByIdAndOwner(runId, owner.key());
+            if (current == null) {
+                return new AgentRunCancellation(
+                        AgentRunCancellation.Outcome.NOT_FOUND, null, null);
+            }
+            if (current.status() == AgentRunStatus.CANCELLED) {
+                return new AgentRunCancellation(
+                        AgentRunCancellation.Outcome.ALREADY_CANCELLED, current, null);
+            }
+            if (current.status().terminal()) {
+                return new AgentRunCancellation(
+                        AgentRunCancellation.Outcome.TERMINAL_CONFLICT, current, null);
+            }
+            AgentRun persisted = repository.update(
+                    current.cancel(clock.instant()), current.version(), null);
+            if (persisted != null) {
+                return new AgentRunCancellation(
+                        AgentRunCancellation.Outcome.CANCELLED,
+                        persisted, current.pendingApprovalId());
+            }
+        }
+        AgentRun latest = repository.findByIdAndOwner(runId, owner.key());
+        return new AgentRunCancellation(
+                AgentRunCancellation.Outcome.CONCURRENT_CONFLICT, latest, null);
+    }
+
     public AgentRun find(String runId) {
         return repository.findById(runId);
     }
 
     public AgentRunEvent appendEvent(String runId, AgentRunEventType type, Object payload) {
+        return appendSystemEvent(runId, type, payload);
+    }
+
+    public AgentRunEvent appendSystemEvent(String runId, AgentRunEventType type, Object payload) {
         AgentRunEvent event = repository.appendEvent(runId, type, json(payload), clock.instant());
         if (event == null) {
             throw new IllegalArgumentException("agent run not found: " + runId);
+        }
+        return event;
+    }
+
+    public AgentRunEvent appendWorkerEvent(
+            String runId,
+            String workerId,
+            long leaseEpoch,
+            AgentRunEventType type,
+            Object payload
+    ) {
+        AgentRunEvent event = repository.appendWorkerEvent(
+                runId, workerId, leaseEpoch, type, json(payload), clock.instant());
+        if (event == null) {
+            throw new AgentRunLeaseLostException("agent run Worker lease fence was lost");
         }
         return event;
     }
@@ -185,8 +315,21 @@ public class AgentRuntimeService {
                 || candidate.getLeaseDuration().isNegative()) {
             throw new IllegalArgumentException("agent.runtime.lease-duration must be positive");
         }
+        if (candidate.getHeartbeatInterval() == null
+                || candidate.getHeartbeatInterval().isZero()
+                || candidate.getHeartbeatInterval().isNegative()
+                || candidate.getHeartbeatInterval().compareTo(candidate.getLeaseDuration()) >= 0) {
+            throw new IllegalArgumentException(
+                    "agent.runtime.heartbeat-interval must be positive and shorter than lease-duration");
+        }
         if (candidate.getEventReplayLimit() < 1) {
             throw new IllegalArgumentException("agent.runtime.event-replay-limit must be positive");
+        }
+        if (candidate.getRecoveryBatchSize() < 1) {
+            throw new IllegalArgumentException("agent.runtime.recovery-batch-size must be positive");
+        }
+        if (candidate.getMaxRecoveryAttempts() < 1) {
+            throw new IllegalArgumentException("agent.runtime.max-recovery-attempts must be positive");
         }
     }
 }
